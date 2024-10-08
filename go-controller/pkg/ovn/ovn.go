@@ -362,7 +362,7 @@ func (oc *DefaultNetworkController) syncNodeGateway(node *kapi.Node, hostSubnets
 	}
 
 	if l3GatewayConfig.Mode == config.GatewayModeDisabled {
-		if err := oc.gatewayCleanup(node.Name); err != nil {
+		if err := oc.newGatewayManager(node.Name).Cleanup(); err != nil {
 			return fmt.Errorf("error cleaning up gateway for node %s: %v", node.Name, err)
 		}
 	} else if hostSubnets != nil {
@@ -373,7 +373,7 @@ func (oc *DefaultNetworkController) syncNodeGateway(node *kapi.Node, hostSubnets
 				return fmt.Errorf("failed to get host CIDRs for node: %s: %v", node.Name, err)
 			}
 		}
-		if err := oc.syncGatewayLogicalNetwork(node, l3GatewayConfig, hostSubnets, hostAddrs); err != nil {
+		if err := oc.syncDefaultGatewayLogicalNetwork(node, l3GatewayConfig, hostSubnets, hostAddrs); err != nil {
 			return fmt.Errorf("error creating gateway for node %s: %v", node.Name, err)
 		}
 	}
@@ -401,9 +401,15 @@ func macAddressChanged(oldNode, node *kapi.Node, netName string) bool {
 	return !bytes.Equal(oldMacAddress, macAddress)
 }
 
-func nodeSubnetChanged(oldNode, node *kapi.Node) bool {
-	oldSubnets, _ := util.ParseNodeHostSubnetAnnotation(oldNode, ovntypes.DefaultNetworkName)
-	newSubnets, _ := util.ParseNodeHostSubnetAnnotation(node, ovntypes.DefaultNetworkName)
+func nodeSubnetChanged(oldNode, node *kapi.Node, netName string) bool {
+	oldSubnets, _ := util.ParseNodeHostSubnetAnnotation(oldNode, netName)
+	newSubnets, _ := util.ParseNodeHostSubnetAnnotation(node, netName)
+	return !reflect.DeepEqual(oldSubnets, newSubnets)
+}
+
+func joinCIDRChanged(oldNode, node *kapi.Node, netName string) bool {
+	oldSubnets, _ := util.ParseNodeGatewayRouterJoinNetwork(oldNode, netName)
+	newSubnets, _ := util.ParseNodeGatewayRouterJoinNetwork(node, netName)
 	return !reflect.DeepEqual(oldSubnets, newSubnets)
 }
 
@@ -439,7 +445,6 @@ func shouldUpdateNode(node, oldNode *kapi.Node) (bool, error) {
 }
 
 func (oc *DefaultNetworkController) StartServiceController(wg *sync.WaitGroup, runRepair bool) error {
-	klog.Infof("Starting OVN Service Controller: Using Endpoint Slices")
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -495,6 +500,7 @@ func (oc *DefaultNetworkController) newANPController() error {
 		oc.isPodScheduledinLocalZone,
 		oc.zone,
 		oc.recorder,
+		oc.observManager,
 	)
 	return err
 }

@@ -32,14 +32,14 @@ import (
 //           "mode": "local",
 //           "interface-id": "br-local_ip-10-0-129-64.us-east-2.compute.internal",
 //           "mac-address": "f2:20:a0:3c:26:4c",
-//           "ip-addresses": ["169.254.33.2/24"],
-//           "next-hops": ["169.254.33.1"],
+//           "ip-addresses": ["169.255.33.2/24"],
+//           "next-hops": ["169.255.33.1"],
 //           "node-port-enable": "true",
 //           "vlan-id": "0"
 //
 //           # backward-compat
-//           "ip-address": "169.254.33.2/24",
-//           "next-hop": "169.254.33.1",
+//           "ip-address": "169.255.33.2/24",
+//           "next-hop": "169.255.33.1",
 //         }
 //       }
 //     k8s.ovn.org/node-chassis-id: b1f96182-2bdd-42b6-88f9-9a1fc1c85ece
@@ -90,6 +90,9 @@ const (
 	//		\"l3-network\":{\"ipv4\":\"100.65.0.4/16\",\"ipv6\":\"fd99::4/64\"}
 	// }",
 	OVNNodeGRLRPAddrs = "k8s.ovn.org/node-gateway-router-lrp-ifaddrs"
+
+	// OvnNodeMasqCIDR is the CIDR form representation of the masquerade subnet that is currently configured on this node (i.e. 169.254.169.0/29)
+	OvnNodeMasqCIDR = "k8s.ovn.org/node-masquerade-subnet"
 
 	// OvnNodeEgressLabel is a user assigned node label indicating to ovn-kubernetes that the node is to be used for egress IP assignment
 	ovnNodeEgressLabel = "k8s.ovn.org/egress-assignable"
@@ -147,6 +150,7 @@ const (
 type L3GatewayConfig struct {
 	Mode                config.GatewayMode
 	ChassisID           string
+	BridgeID            string
 	InterfaceID         string
 	MACAddress          net.HardwareAddr
 	IPAddresses         []*net.IPNet
@@ -160,6 +164,7 @@ type L3GatewayConfig struct {
 
 type l3GatewayConfigJSON struct {
 	Mode                config.GatewayMode `json:"mode"`
+	BridgeID            string             `json:"bridge-id,omitempty"`
 	InterfaceID         string             `json:"interface-id,omitempty"`
 	MACAddress          string             `json:"mac-address,omitempty"`
 	IPAddresses         []string           `json:"ip-addresses,omitempty"`
@@ -182,6 +187,7 @@ func (cfg *L3GatewayConfig) MarshalJSON() ([]byte, error) {
 		return json.Marshal(&cfgjson)
 	}
 
+	cfgjson.BridgeID = cfg.BridgeID
 	cfgjson.InterfaceID = cfg.InterfaceID
 	cfgjson.MACAddress = cfg.MACAddress.String()
 	cfgjson.EgressGWInterfaceID = cfg.EgressGWInterfaceID
@@ -229,6 +235,7 @@ func (cfg *L3GatewayConfig) UnmarshalJSON(bytes []byte) error {
 		return fmt.Errorf("bad 'mode' value %q", cfgjson.Mode)
 	}
 
+	cfg.BridgeID = cfgjson.BridgeID
 	cfg.InterfaceID = cfgjson.InterfaceID
 	cfg.EgressGWInterfaceID = cfgjson.EgressGWInterfaceID
 
@@ -438,7 +445,7 @@ func UpdateNodeManagementPortMACAddressesWithRetry(node *kapi.Node, nodeLister l
 		return kubeInterface.UpdateNodeStatus(cnode)
 	})
 	if resultErr != nil {
-		return fmt.Errorf("failed to update node %s annotation", node.Name)
+		return fmt.Errorf("failed to update node %s annotation: %w", node.Name, resultErr)
 	}
 	return nil
 }
@@ -682,6 +689,12 @@ func NodeTransitSwitchPortAddrAnnotationChanged(oldNode, newNode *corev1.Node) b
 	return oldNode.Annotations[ovnTransitSwitchPortAddr] != newNode.Annotations[ovnTransitSwitchPortAddr]
 }
 
+// CreateNodeMasqueradeSubnetAnnotation sets the IPv4 / IPv6 values of the node's Masquerade subnet.
+func CreateNodeMasqueradeSubnetAnnotation(nodeAnnotation map[string]interface{}, nodeIPNetv4,
+	nodeIPNetv6 *net.IPNet) (map[string]interface{}, error) {
+	return createPrimaryIfAddrAnnotation(OvnNodeMasqCIDR, nodeAnnotation, nodeIPNetv4, nodeIPNetv6)
+}
+
 const UnlimitedNodeCapacity = math.MaxInt32
 
 type ifAddr struct {
@@ -817,7 +830,7 @@ func ParseNodeGatewayRouterLRPAddrs(node *kapi.Node) ([]*net.IPNet, error) {
 	return parsePrimaryIfAddrAnnotation(node, ovnNodeGRLRPAddr)
 }
 
-func parseNodeGatewayRouterJoinNetwork(node *kapi.Node, netName string) (primaryIfAddrAnnotation, error) {
+func ParseNodeGatewayRouterJoinNetwork(node *kapi.Node, netName string) (primaryIfAddrAnnotation, error) {
 	var val primaryIfAddrAnnotation
 	joinSubnetMap, err := parseJoinSubnetAnnotation(node.Annotations, OVNNodeGRLRPAddrs)
 	if err != nil {
@@ -835,7 +848,7 @@ func parseNodeGatewayRouterJoinNetwork(node *kapi.Node, netName string) (primary
 // ParseNodeGatewayRouterJoinIPv4 returns the IPv4 address for the node's gateway router port
 // stored in the 'OVNNodeGRLRPAddrs' annotation
 func ParseNodeGatewayRouterJoinIPv4(node *kapi.Node, netName string) (net.IP, error) {
-	primaryIfAddr, err := parseNodeGatewayRouterJoinNetwork(node, netName)
+	primaryIfAddr, err := ParseNodeGatewayRouterJoinNetwork(node, netName)
 	if err != nil {
 		return nil, err
 	}
@@ -854,7 +867,7 @@ func ParseNodeGatewayRouterJoinIPv4(node *kapi.Node, netName string) (net.IP, er
 // ParseNodeGatewayRouterJoinAddrs returns the IPv4 and/or IPv6 addresses for the node's gateway router port
 // stored in the 'OVNNodeGRLRPAddrs' annotation
 func ParseNodeGatewayRouterJoinAddrs(node *kapi.Node, netName string) ([]*net.IPNet, error) {
-	primaryIfAddr, err := parseNodeGatewayRouterJoinNetwork(node, netName)
+	primaryIfAddr, err := ParseNodeGatewayRouterJoinNetwork(node, netName)
 	if err != nil {
 		return nil, err
 	}
@@ -865,6 +878,12 @@ func ParseNodeGatewayRouterJoinAddrs(node *kapi.Node, netName string) ([]*net.IP
 // stored in the 'ovnTransitSwitchPortAddr' annotation
 func ParseNodeTransitSwitchPortAddrs(node *kapi.Node) ([]*net.IPNet, error) {
 	return parsePrimaryIfAddrAnnotation(node, ovnTransitSwitchPortAddr)
+}
+
+// ParseNodeMasqueradeSubnet returns the IPv4 and/or IPv6 networks for the node's gateway router port
+// stored in the 'OvnNodeMasqCIDR' annotation
+func ParseNodeMasqueradeSubnet(node *kapi.Node) ([]*net.IPNet, error) {
+	return parsePrimaryIfAddrAnnotation(node, OvnNodeMasqCIDR)
 }
 
 // GetNodeEIPConfig attempts to generate EIP configuration from a nodes annotations.
@@ -988,6 +1007,38 @@ func ParseNodeHostCIDRs(node *kapi.Node) (sets.Set[string], error) {
 			addrAnnotation, node.Name, err)
 	}
 
+	return sets.New(cfg...), nil
+}
+
+// ParseNodeHostIPDropNetMask returns the parsed host IP addresses found on a node's host CIDR annotation. Removes the mask.
+func ParseNodeHostIPDropNetMask(node *kapi.Node) (sets.Set[string], error) {
+	nodeIfAddrAnnotation, ok := node.Annotations[OvnNodeIfAddr]
+	if !ok {
+		return nil, newAnnotationNotSetError("%s annotation not found for node %q", OvnNodeIfAddr, node.Name)
+	}
+	nodeIfAddr := &primaryIfAddrAnnotation{}
+	if err := json.Unmarshal([]byte(nodeIfAddrAnnotation), nodeIfAddr); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal annotation: %s for node %q, err: %v", OvnNodeIfAddr, node.Name, err)
+	}
+
+	var cfg []string
+	if nodeIfAddr.IPv4 != "" {
+		cfg = append(cfg, nodeIfAddr.IPv4)
+	}
+	if nodeIfAddr.IPv6 != "" {
+		cfg = append(cfg, nodeIfAddr.IPv6)
+	}
+	if len(cfg) == 0 {
+		return nil, fmt.Errorf("node: %q does not have any IP information set", node.Name)
+	}
+
+	for i, cidr := range cfg {
+		ip, _, err := net.ParseCIDR(cidr)
+		if err != nil || ip == nil {
+			return nil, fmt.Errorf("failed to parse node host cidr: %v", err)
+		}
+		cfg[i] = ip.String()
+	}
 	return sets.New(cfg...), nil
 }
 
@@ -1387,7 +1438,7 @@ func filterIPVersion(cidrs []netip.Prefix, v6 bool) []netip.Prefix {
 // GetNetworkID will retrieve the network id for the specified network from the
 // first node that contains that network at the network id annotations, it will
 // return at the first ocurrence, rest of nodes will not be parsed.
-func GetNetworkID(nodes []*corev1.Node, nInfo NetInfo) (int, error) {
+func GetNetworkID(nodes []*corev1.Node, nInfo BasicNetInfo) (int, error) {
 	for _, node := range nodes {
 		var err error
 		networkID, err := ParseNetworkIDAnnotation(node, nInfo.GetNetworkName())

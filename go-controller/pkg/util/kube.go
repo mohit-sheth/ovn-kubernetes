@@ -18,9 +18,7 @@ import (
 	certificatesv1 "k8s.io/api/certificates/v1"
 	kapi "k8s.io/api/core/v1"
 	discovery "k8s.io/api/discovery/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -48,7 +46,7 @@ import (
 	egressipclientset "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/egressip/v1/apis/clientset/versioned"
 	egressqosclientset "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/egressqos/v1/apis/clientset/versioned"
 	egressserviceclientset "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/egressservice/v1/apis/clientset/versioned"
-	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/types"
+	userdefinednetworkclientset "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1/apis/clientset/versioned"
 	anpclientset "sigs.k8s.io/network-policy-api/pkg/client/clientset/versioned"
 )
 
@@ -66,6 +64,7 @@ type OVNClientset struct {
 	EgressServiceClient      egressserviceclientset.Interface
 	AdminPolicyRouteClient   adminpolicybasedrouteclientset.Interface
 	IPAMClaimsClient         ipamclaimssclientset.Interface
+	UserDefinedNetworkClient userdefinednetworkclientset.Interface
 }
 
 // OVNMasterClientset
@@ -82,6 +81,7 @@ type OVNMasterClientset struct {
 	AdminPolicyRouteClient   adminpolicybasedrouteclientset.Interface
 	IPAMClaimsClient         ipamclaimssclientset.Interface
 	NetworkAttchDefClient    networkattchmentdefclientset.Interface
+	UserDefinedNetworkClient userdefinednetworkclientset.Interface
 }
 
 // OVNNetworkControllerManagerClientset
@@ -97,6 +97,7 @@ type OVNKubeControllerClientset struct {
 	AdminPolicyRouteClient   adminpolicybasedrouteclientset.Interface
 	IPAMClaimsClient         ipamclaimssclientset.Interface
 	NetworkAttchDefClient    networkattchmentdefclientset.Interface
+	UserDefinedNetworkClient userdefinednetworkclientset.Interface
 }
 
 type OVNNodeClientset struct {
@@ -108,17 +109,18 @@ type OVNNodeClientset struct {
 }
 
 type OVNClusterManagerClientset struct {
-	KubeClient             kubernetes.Interface
-	ANPClient              anpclientset.Interface
-	EgressIPClient         egressipclientset.Interface
-	CloudNetworkClient     ocpcloudnetworkclientset.Interface
-	NetworkAttchDefClient  networkattchmentdefclientset.Interface
-	EgressServiceClient    egressserviceclientset.Interface
-	AdminPolicyRouteClient adminpolicybasedrouteclientset.Interface
-	EgressFirewallClient   egressfirewallclientset.Interface
-	EgressQoSClient        egressqosclientset.Interface
-	IPAMClaimsClient       ipamclaimssclientset.Interface
-	OCPNetworkClient       ocpnetworkclientset.Interface
+	KubeClient               kubernetes.Interface
+	ANPClient                anpclientset.Interface
+	EgressIPClient           egressipclientset.Interface
+	CloudNetworkClient       ocpcloudnetworkclientset.Interface
+	NetworkAttchDefClient    networkattchmentdefclientset.Interface
+	EgressServiceClient      egressserviceclientset.Interface
+	AdminPolicyRouteClient   adminpolicybasedrouteclientset.Interface
+	EgressFirewallClient     egressfirewallclientset.Interface
+	EgressQoSClient          egressqosclientset.Interface
+	IPAMClaimsClient         ipamclaimssclientset.Interface
+	OCPNetworkClient         ocpnetworkclientset.Interface
+	UserDefinedNetworkClient userdefinednetworkclientset.Interface
 }
 
 const (
@@ -145,6 +147,7 @@ func (cs *OVNClientset) GetMasterClientset() *OVNMasterClientset {
 		AdminPolicyRouteClient:   cs.AdminPolicyRouteClient,
 		IPAMClaimsClient:         cs.IPAMClaimsClient,
 		NetworkAttchDefClient:    cs.NetworkAttchDefClient,
+		UserDefinedNetworkClient: cs.UserDefinedNetworkClient,
 	}
 }
 
@@ -177,22 +180,24 @@ func (cs *OVNClientset) GetOVNKubeControllerClientset() *OVNKubeControllerClient
 		AdminPolicyRouteClient:   cs.AdminPolicyRouteClient,
 		IPAMClaimsClient:         cs.IPAMClaimsClient,
 		NetworkAttchDefClient:    cs.NetworkAttchDefClient,
+		UserDefinedNetworkClient: cs.UserDefinedNetworkClient,
 	}
 }
 
 func (cs *OVNClientset) GetClusterManagerClientset() *OVNClusterManagerClientset {
 	return &OVNClusterManagerClientset{
-		KubeClient:             cs.KubeClient,
-		ANPClient:              cs.ANPClient,
-		EgressIPClient:         cs.EgressIPClient,
-		CloudNetworkClient:     cs.CloudNetworkClient,
-		NetworkAttchDefClient:  cs.NetworkAttchDefClient,
-		EgressServiceClient:    cs.EgressServiceClient,
-		AdminPolicyRouteClient: cs.AdminPolicyRouteClient,
-		EgressFirewallClient:   cs.EgressFirewallClient,
-		EgressQoSClient:        cs.EgressQoSClient,
-		IPAMClaimsClient:       cs.IPAMClaimsClient,
-		OCPNetworkClient:       cs.OCPNetworkClient,
+		KubeClient:               cs.KubeClient,
+		ANPClient:                cs.ANPClient,
+		EgressIPClient:           cs.EgressIPClient,
+		CloudNetworkClient:       cs.CloudNetworkClient,
+		NetworkAttchDefClient:    cs.NetworkAttchDefClient,
+		EgressServiceClient:      cs.EgressServiceClient,
+		AdminPolicyRouteClient:   cs.AdminPolicyRouteClient,
+		EgressFirewallClient:     cs.EgressFirewallClient,
+		EgressQoSClient:          cs.EgressQoSClient,
+		IPAMClaimsClient:         cs.IPAMClaimsClient,
+		OCPNetworkClient:         cs.OCPNetworkClient,
+		UserDefinedNetworkClient: cs.UserDefinedNetworkClient,
 	}
 }
 
@@ -479,6 +484,11 @@ func NewOVNClientset(conf *config.KubernetesConfig) (*OVNClientset, error) {
 		return nil, err
 	}
 
+	userDefinedNetworkClientSet, err := userdefinednetworkclientset.NewForConfig(kconfig)
+	if err != nil {
+		return nil, err
+	}
+
 	return &OVNClientset{
 		KubeClient:               kclientset,
 		ANPClient:                anpClientset,
@@ -492,6 +502,7 @@ func NewOVNClientset(conf *config.KubernetesConfig) (*OVNClientset, error) {
 		EgressServiceClient:      egressserviceClientset,
 		AdminPolicyRouteClient:   adminPolicyBasedRouteClientset,
 		IPAMClaimsClient:         ipamClaimsClientset,
+		UserDefinedNetworkClient: userDefinedNetworkClientSet,
 	}, nil
 }
 
@@ -667,41 +678,6 @@ func EventRecorder(kubeClient kubernetes.Interface) record.EventRecorder {
 		scheme.Scheme,
 		kapi.EventSource{Component: "controlplane"})
 	return recorder
-}
-
-// UseEndpointSlices detect if Endpoints Slices are enabled in the cluster
-func UseEndpointSlices(kubeClient kubernetes.Interface) bool {
-	if _, err := kubeClient.Discovery().ServerResourcesForGroupVersion(discovery.SchemeGroupVersion.String()); err == nil {
-		klog.V(2).Infof("Kubernetes Endpoint Slices enabled on the cluster: %s", discovery.SchemeGroupVersion.String())
-		return true
-	}
-	return false
-}
-
-type K8sObject interface {
-	metav1.Object
-	k8sruntime.Object
-}
-
-func ExternalIDsForObject(obj K8sObject) map[string]string {
-	gk := obj.GetObjectKind().GroupVersionKind().GroupKind()
-	nsn := k8stypes.NamespacedName{
-		Namespace: obj.GetNamespace(),
-		Name:      obj.GetName(),
-	}
-
-	if gk.String() == "" {
-		kinds, _, err := scheme.Scheme.ObjectKinds(obj)
-		if err != nil || len(kinds) == 0 || len(kinds) > 1 {
-			klog.Warningf("Object %v either has no GroupVersionKind or has an ambiguous GroupVersionKind: %#v, err", obj, err)
-		}
-		gk = kinds[0].GroupKind()
-	}
-
-	return map[string]string{
-		types.LoadBalancerOwnerExternalID: nsn.String(),
-		types.LoadBalancerKindExternalID:  gk.String(),
-	}
 }
 
 // IsEndpointReady takes as input an endpoint from an endpoint slice and returns true if the endpoint is

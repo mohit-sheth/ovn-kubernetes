@@ -12,6 +12,11 @@ const (
 	// K8sMgmtIntfNamePrefix name to be used as an OVS internal port on the node as prefix for networs
 	K8sMgmtIntfNamePrefix = "ovn-k8s-mp"
 
+	// UDNVRFDeviceSuffix vrf device suffix associated with every user defined primary network.
+	UDNVRFDeviceSuffix = "-udn-vrf"
+	// UDNVRFDevicePrefix vrf device prefix associated with every user
+	UDNVRFDevicePrefix = "mp"
+
 	// K8sMgmtIntfName name to be used as an OVS internal port on the node
 	K8sMgmtIntfName = K8sMgmtIntfNamePrefix + "0"
 
@@ -50,6 +55,8 @@ const (
 	EXTSwitchToGWRouterPrefix    = "etor-"
 	GWRouterToExtSwitchPrefix    = "rtoe-"
 	EgressGWSwitchPrefix         = "exgw-"
+	PatchPortPrefix              = "patch-"
+	PatchPortSuffix              = "-to-br-int"
 
 	NodeLocalSwitch = "node_local_switch"
 
@@ -113,6 +120,12 @@ const (
 	EndpointSliceMirrorControllerName = "endpointslice-mirror-controller.k8s.ovn.org"
 	// EndpointSliceDefaultControllerName default kubernetes EndpointSlice controller name (used as a value for the "endpointslice.kubernetes.io/managed-by" label)
 	EndpointSliceDefaultControllerName = "endpointslice-controller.k8s.io"
+	// LabelSourceEndpointSlice label key used in mirrored EndpointSlice
+	// that has the value of the default EndpointSlice name
+	LabelSourceEndpointSlice = "k8s.ovn.org/source-endpointslice"
+	// LabelSourceEndpointSliceVersion label key used in mirrored EndpointSlice
+	// that has the value of the last known default EndpointSlice ResourceVersion
+	LabelSourceEndpointSliceVersion = "k8s.ovn.org/source-endpointslice-version"
 	// LabelUserDefinedEndpointSliceNetwork label key used in mirrored EndpointSlices that contains the current primary user defined network name
 	LabelUserDefinedEndpointSliceNetwork = "k8s.ovn.org/endpointslice-network"
 	// LabelUserDefinedServiceName label key used in mirrored EndpointSlices that contains the service name matching the EndpointSlice
@@ -172,7 +185,10 @@ const (
 
 	// key for network name external-id
 	NetworkExternalID = OvnK8sPrefix + "/" + "network"
+	// key for network role external-id: possible values are "default", "primary", "secondary"
+	NetworkRoleExternalID = OvnK8sPrefix + "/" + "role"
 	// key for NAD name external-id, only used for secondary logical switch port of a pod
+	// key for network name external-id
 	NADExternalID = OvnK8sPrefix + "/" + "nad"
 	// key for topology type external-id, only used for secondary network logical entities
 	TopologyExternalID = OvnK8sPrefix + "/" + "topology"
@@ -190,6 +206,7 @@ const (
 	// defined in CNI netconf as a user defined network
 	NetworkRolePrimary   = "primary"
 	NetworkRoleSecondary = "secondary"
+	NetworkRoleDefault   = "default"
 	// defined internally by ovnkube to recognize "default"
 	// network's role as a "infrastructure-locked" network
 	// when user defined network is the primary network for

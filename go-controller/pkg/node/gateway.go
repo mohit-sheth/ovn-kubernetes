@@ -21,6 +21,8 @@ import (
 	kapi "k8s.io/api/core/v1"
 	discovery "k8s.io/api/discovery/v1"
 	"k8s.io/klog/v2"
+
+	nadlister "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/listers/k8s.cni.cncf.io/v1"
 )
 
 // Gateway responds to Service and Endpoint K8s events
@@ -352,6 +354,7 @@ func gatewayInitInternal(nodeName, gwIntf, egressGatewayIntf string, gwNextHops 
 	l3GwConfig := util.L3GatewayConfig{
 		Mode:           config.Gateway.Mode,
 		ChassisID:      chassisID,
+		BridgeID:       gatewayBridge.bridgeName,
 		InterfaceID:    gatewayBridge.interfaceID,
 		MACAddress:     gatewayBridge.macAddress,
 		IPAddresses:    gatewayBridge.ips,
@@ -403,7 +406,7 @@ func (g *gateway) Reconcile() error {
 	}
 	subnets, err := util.ParseNodeHostSubnetAnnotation(node, types.DefaultNetworkName)
 	if err != nil {
-		return fmt.Errorf("failed to get subnets for node: %s for OpenFlow cache update", node.Name)
+		return fmt.Errorf("failed to get subnets for node: %s for OpenFlow cache update; err: %w", node.Name, err)
 	}
 	if err := g.openflowManager.updateBridgeFlowCache(subnets, g.nodeIPManager.ListAddresses()); err != nil {
 		return err
@@ -440,15 +443,15 @@ func (g *gateway) addAllServices() []error {
 
 type bridgeConfiguration struct {
 	sync.Mutex
+	nodeName    string
 	bridgeName  string
 	uplinkName  string
 	ips         []*net.IPNet
 	interfaceID string
 	macAddress  net.HardwareAddr
-	patchPort   string
-	ofPortPatch string
 	ofPortPhys  string
 	ofPortHost  string
+	netConfig   map[string]*bridgeUDNConfiguration
 }
 
 // updateInterfaceIPAddresses sets and returns the bridge's current ips
@@ -482,7 +485,15 @@ func (b *bridgeConfiguration) updateInterfaceIPAddresses(node *kapi.Node) ([]*ne
 }
 
 func bridgeForInterface(intfName, nodeName, physicalNetworkName string, gwIPs []*net.IPNet) (*bridgeConfiguration, error) {
-	res := bridgeConfiguration{}
+	defaultNetConfig := &bridgeUDNConfiguration{
+		masqCTMark: ctMarkOVN,
+	}
+	res := bridgeConfiguration{
+		nodeName: nodeName,
+		netConfig: map[string]*bridgeUDNConfiguration{
+			types.DefaultNetworkName: defaultNetConfig,
+		},
+	}
 	gwIntf := intfName
 
 	if bridgeName, _, err := util.RunOVSVsctl("port-to-br", intfName); err == nil {
@@ -544,7 +555,7 @@ func bridgeForInterface(intfName, nodeName, physicalNetworkName string, gwIPs []
 
 	// the name of the patch port created by ovn-controller is of the form
 	// patch-<logical_port_name_of_localnet_port>-to-br-int
-	res.patchPort = "patch-" + res.bridgeName + "_" + nodeName + "-to-br-int"
+	defaultNetConfig.patchPort = (&util.DefaultNetInfo{}).GetNetworkScopedPatchPortName(res.bridgeName, nodeName)
 
 	// for DPU we use the host MAC address for the Gateway configuration
 	if config.OvnKubeNode.Mode == types.NodeModeDPU {
@@ -559,4 +570,23 @@ func bridgeForInterface(intfName, nodeName, physicalNetworkName string, gwIPs []
 	}
 
 	return &res, nil
+}
+
+// baseNodeServiceWatcher is a base structure to be inherited by all node-side
+// watchers that handle Service changes.
+type baseNodeServiceWatcher struct {
+	watchFactory factory.NodeWatchFactory
+}
+
+// getActiveNetworkForNamespace returns the active network for the given namespace
+// and is a wrapper around util.GetActiveNetworkForNamespace
+//
+// FIXME(dceara): This is inefficient, instead use the new controller that will
+// be added by https://github.com/ovn-org/ovn-kubernetes/pull/4662.
+func (bnsw *baseNodeServiceWatcher) GetActiveNetworkForNamespace(namespace string) (util.NetInfo, error) {
+	var nadLister nadlister.NetworkAttachmentDefinitionLister
+	if util.IsNetworkSegmentationSupportEnabled() {
+		nadLister = bnsw.watchFactory.NADInformer().Lister()
+	}
+	return util.GetActiveNetworkForNamespace(namespace, nadLister)
 }

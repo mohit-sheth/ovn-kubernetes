@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	utilnet "k8s.io/utils/net"
+
 	"github.com/k8snetworkplumbingwg/sriovnet"
 	"github.com/stretchr/testify/mock"
 	"github.com/urfave/cli/v2"
@@ -23,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	nadfake "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/clientset/versioned/fake"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
 	adminpolicybasedrouteclient "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/adminpolicybasedroute/v1/apis/clientset/versioned/fake"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/factory"
@@ -88,15 +91,6 @@ func shareGatewayInterfaceTest(app *cli.App, testNS ns.NetNS,
 			Action: func() error {
 				return testNS.Do(func(ns.NetNS) error {
 					defer GinkgoRecover()
-
-					// Create breth0 as a dummy link
-					err := netlink.LinkAdd(&netlink.Dummy{
-						LinkAttrs: netlink.LinkAttrs{
-							Name:         "br" + eth0Name,
-							HardwareAddr: ovntest.MustParseMAC(eth0MAC),
-						},
-					})
-					Expect(err).NotTo(HaveOccurred())
 					_, err = netlink.LinkByName("br" + eth0Name)
 					Expect(err).NotTo(HaveOccurred())
 					return nil
@@ -174,10 +168,6 @@ func shareGatewayInterfaceTest(app *cli.App, testNS ns.NetNS,
 		})
 		// nodePortWatcher()
 		fexec.AddFakeCmd(&ovntest.ExpectedCmd{
-			Cmd:    "ovs-vsctl --timeout=15 --if-exists get interface patch-breth0_" + nodeName + "-to-br-int ofport",
-			Output: "5",
-		})
-		fexec.AddFakeCmd(&ovntest.ExpectedCmd{
 			Cmd:    "ovs-vsctl --timeout=15 --if-exists get interface eth0 ofport",
 			Output: "7",
 		})
@@ -192,6 +182,10 @@ func shareGatewayInterfaceTest(app *cli.App, testNS ns.NetNS,
 		existingNode := v1.Node{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: nodeName,
+				Annotations: map[string]string{
+					// add some fake previous subnets to force OVNK to try to clean it
+					util.OvnNodeMasqCIDR: "{\"ipv4\":\"170.254.0.0/16\",\"ipv6\":\"fa69::/112\"}",
+				},
 			},
 		}
 		if setNodeIP {
@@ -260,6 +254,39 @@ func shareGatewayInterfaceTest(app *cli.App, testNS ns.NetNS,
 		err = testNS.Do(func(ns.NetNS) error {
 			defer GinkgoRecover()
 
+			// setup stale masquerade
+			// Create breth0 as a dummy link
+			err := netlink.LinkAdd(&netlink.Dummy{
+				LinkAttrs: netlink.LinkAttrs{
+					Name:         "br" + eth0Name,
+					HardwareAddr: ovntest.MustParseMAC(eth0MAC),
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			link, err := netlink.LinkByName("br" + eth0Name)
+			Expect(err).NotTo(HaveOccurred())
+			err = netlink.LinkSetUp(link)
+			Expect(err).NotTo(HaveOccurred())
+			staleAddr, err := netlink.ParseAddr("170.254.0.2/32")
+			Expect(err).NotTo(HaveOccurred())
+			err = netlink.AddrAdd(link, staleAddr)
+			Expect(err).NotTo(HaveOccurred())
+			_, gw, err := net.ParseCIDR("170.254.0.1/32")
+			Expect(err).NotTo(HaveOccurred())
+			staleRoute := &netlink.Route{
+				LinkIndex: link.Attrs().Index,
+				Dst:       gw,
+			}
+			err = netlink.RouteAdd(staleRoute)
+			Expect(err).NotTo(HaveOccurred())
+			// ensure stale route is present
+			r, err := util.LinkRouteGetFilteredRoute(
+				staleRoute,
+				netlink.RT_FILTER_DST|netlink.RT_FILTER_OIF|netlink.RT_FILTER_SRC,
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r).NotTo(BeNil())
+
 			gatewayNextHops, gatewayIntf, err := getGatewayNextHops()
 			Expect(err).NotTo(HaveOccurred())
 			ifAddrs := ovntest.MustParseIPNets(eth0CIDR)
@@ -284,16 +311,21 @@ func shareGatewayInterfaceTest(app *cli.App, testNS ns.NetNS,
 			Expect(err).NotTo(HaveOccurred())
 			addrs, err := netlink.AddrList(l, syscall.AF_INET)
 			Expect(err).NotTo(HaveOccurred())
-			var found bool
+			var found, staleFound bool
 			expectedAddr, err := netlink.ParseAddr(eth0CIDR)
 			Expect(err).NotTo(HaveOccurred())
 			for _, a := range addrs {
+				// ensure stale masquerade IP was removed from the bridge
+				if a.IP.Equal(staleAddr.IP) && bytes.Equal(a.Mask, staleAddr.Mask) {
+					staleFound = true
+				}
+				// ensure code moved correct IP to bridge
 				if a.IP.Equal(expectedAddr.IP) && bytes.Equal(a.Mask, expectedAddr.Mask) {
 					found = true
-					break
 				}
 			}
 			Expect(found).To(BeTrue())
+			Expect(staleFound).To(BeFalse())
 
 			Expect(l.Attrs().HardwareAddr.String()).To(Equal(eth0MAC))
 
@@ -316,6 +348,13 @@ func shareGatewayInterfaceTest(app *cli.App, testNS ns.NetNS,
 				}
 				return nil
 			}, 1*time.Second).ShouldNot(HaveOccurred())
+			// ensure stale masquerade route is no longer present
+			r, err = util.LinkRouteGetFilteredRoute(
+				staleRoute,
+				netlink.RT_FILTER_DST|netlink.RT_FILTER_OIF|netlink.RT_FILTER_SRC,
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r).To(BeNil())
 			return nil
 		})
 		Expect(err).NotTo(HaveOccurred())
@@ -392,6 +431,20 @@ func shareGatewayInterfaceTest(app *cli.App, testNS ns.NetNS,
 		f6 := iptV6.(*util.FakeIPTables)
 		err = f6.MatchState(expectedTables, nil)
 		Expect(err).NotTo(HaveOccurred())
+
+		// check that masquerade subnet annotation got updated
+		node, err := wf.GetNode(nodeName)
+		Expect(err).NotTo(HaveOccurred())
+		subnets, err := util.ParseNodeMasqueradeSubnet(node)
+		Expect(err).NotTo(HaveOccurred())
+		for _, subnet := range subnets {
+			if utilnet.IsIPv4CIDR(subnet) {
+				Expect(subnet.String()).To(Equal(config.Gateway.V4MasqueradeSubnet))
+			} else if utilnet.IsIPv6CIDR(subnet) {
+				Expect(subnet.String()).To(Equal(config.Gateway.V6MasqueradeSubnet))
+			}
+		}
+
 		return nil
 	}
 
@@ -555,10 +608,6 @@ func shareGatewayInterfaceDPUTest(app *cli.App, testNS ns.NetNS,
 			"ovs-ofctl -O OpenFlow13 --bundle replace-flows " + brphys + " -",
 		})
 		// nodePortWatcher()
-		fexec.AddFakeCmd(&ovntest.ExpectedCmd{
-			Cmd:    "ovs-vsctl --timeout=15 --if-exists get interface patch-" + brphys + "_" + nodeName + "-to-br-int ofport",
-			Output: "5",
-		})
 		fexec.AddFakeCmd(&ovntest.ExpectedCmd{
 			Cmd:    "ovs-vsctl --timeout=15 --if-exists get interface " + uplinkPort + " ofport",
 			Output: "7",
@@ -748,8 +797,9 @@ func shareGatewayInterfaceDPUHostTest(app *cli.App, testNS ns.NetNS, uplinkName,
 		ip, ipnet, err := net.ParseCIDR(hostIP + "/24")
 		Expect(err).NotTo(HaveOccurred())
 		ipnet.IP = ip
-		cnnci := NewCommonNodeNetworkControllerInfo(nil, fakeClient.AdminPolicyRouteClient, wf, nil, nodeName)
-		nc := newDefaultNodeNetworkController(cnnci, stop, wg)
+		routeManager := routemanager.NewController()
+		cnnci := NewCommonNodeNetworkControllerInfo(kubeFakeClient, fakeClient.AdminPolicyRouteClient, wf, nil, nodeName, routeManager)
+		nc := newDefaultNodeNetworkController(cnnci, stop, wg, routeManager)
 		// must run route manager manually which is usually started with nc.Start()
 		wg.Add(1)
 		go testNS.Do(func(netNS ns.NetNS) error {
@@ -971,10 +1021,6 @@ OFPT_GET_CONFIG_REPLY (xid=0x4): frags=normal miss_send_len=0`
 			Output: ovsOFOutput,
 		})
 		fexec.AddFakeCmd(&ovntest.ExpectedCmd{
-			Cmd:    "ovs-vsctl --timeout=15 --if-exists get interface patch-breth0_" + nodeName + "-to-br-int ofport",
-			Output: "5",
-		})
-		fexec.AddFakeCmd(&ovntest.ExpectedCmd{
 			Cmd:    "ovs-vsctl --timeout=15 --if-exists get interface eth0 ofport",
 			Output: "7",
 		})
@@ -1049,6 +1095,9 @@ OFPT_GET_CONFIG_REPLY (xid=0x4): frags=normal miss_send_len=0`
 		)
 		fakeClient := &util.OVNNodeClientset{
 			KubeClient: kubeFakeClient,
+		}
+		if util.IsNetworkSegmentationSupportEnabled() {
+			fakeClient.NetworkAttchDefClient = nadfake.NewSimpleClientset()
 		}
 
 		stop := make(chan struct{})
@@ -1203,6 +1252,15 @@ OFPT_GET_CONFIG_REPLY (xid=0x4): frags=normal miss_send_len=0`
 		expectedTables["filter"]["FORWARD"] = append(expectedMCSRules, expectedTables["filter"]["FORWARD"]...)
 		expectedTables["filter"]["OUTPUT"] = append(expectedMCSRules, expectedTables["filter"]["OUTPUT"]...)
 		// END OCP HACK
+		if util.IsNetworkSegmentationSupportEnabled() {
+			expectedTables["nat"]["POSTROUTING"] = append(expectedTables["nat"]["POSTROUTING"],
+				"-j OVN-KUBE-UDN-MASQUERADE",
+			)
+			expectedTables["nat"]["OVN-KUBE-UDN-MASQUERADE"] = append(expectedTables["nat"]["OVN-KUBE-UDN-MASQUERADE"],
+				"-s 169.254.169.2/29 -j RETURN",     // this guarantees we don't SNAT default network masqueradeIPs
+				"-s 169.254.169.0/29 -j MASQUERADE", // this guarantees we SNAT all UDN MasqueradeIPs traffic leaving the node
+			)
+		}
 		f4 := iptV4.(*util.FakeIPTables)
 		err = f4.MatchState(expectedTables, map[util.FakePolicyKey]string{{
 			Table: "filter",
@@ -1296,6 +1354,12 @@ var _ = Describe("Gateway Init Operations", func() {
 		})
 
 		ovntest.OnSupportedPlatformsIt("sets up a local gateway with predetermined interface", func() {
+			localGatewayInterfaceTest(app, testNS, eth0Name, eth0MAC, eth0GWIP, eth0CIDR, link)
+		})
+
+		ovntest.OnSupportedPlatformsIt("sets up a local gateway with predetermined interface when network-segmentation is enabled", func() {
+			config.OVNKubernetesFeature.EnableNetworkSegmentation = true
+			config.OVNKubernetesFeature.EnableMultiNetwork = true
 			localGatewayInterfaceTest(app, testNS, eth0Name, eth0MAC, eth0GWIP, eth0CIDR, link)
 		})
 

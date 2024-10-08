@@ -28,6 +28,7 @@ import (
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/metrics"
 	controllerManager "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/network-controller-manager"
 	ovnnode "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/node"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/node/routemanager"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/types"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 	utilerrors "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/errors"
@@ -541,7 +542,9 @@ func runOvnKube(ctx context.Context, runMode *ovnkubeRunMode, ovnClientset *util
 				ovnClientset,
 				watchFactory,
 				runMode.identity,
-				eventRecorder)
+				wg,
+				eventRecorder,
+				routemanager.NewController())
 			if err != nil {
 				nodeErr = fmt.Errorf("failed to create node network controller: %w", err)
 				return

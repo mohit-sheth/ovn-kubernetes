@@ -95,6 +95,8 @@ fi
 # OVN_KUBERNETES_CONNTRACK_ZONE - Conntrack zone number used for openflow rules (default 64000)
 # OVN_NORTHD_BACKOFF_INTERVAL - ovn northd backoff interval in ms (default 300)
 # OVN_ENABLE_SVC_TEMPLATE_SUPPORT - enable svc template support
+# OVN_ENABLE_DNSNAMERESOLVER - enable dns name resolver support
+# OVN_OBSERV_ENABLE - enable observability for ovnkube
 
 # The argument to the command is the operation to be performed
 # ovn-master ovn-controller ovn-node display display_env ovn_debug
@@ -307,6 +309,10 @@ ovnkube_compact_mode_enable=${OVNKUBE_COMPACT_MODE_ENABLE:-false}
 ovn_northd_backoff_interval=${OVN_NORTHD_BACKOFF_INTERVAL:-"300"}
 # OVN_ENABLE_SVC_TEMPLATE_SUPPORT - enable svc template support
 ovn_enable_svc_template_support=${OVN_ENABLE_SVC_TEMPLATE_SUPPORT:-true}
+# OVN_ENABLE_DNSNAMERESOLVER - enable dns name resolver support
+ovn_enable_dnsnameresolver=${OVN_ENABLE_DNSNAMERESOLVER:-false}
+# OVN_OBSERV_ENABLE - enable observability for ovnkube
+ovn_observ_enable=${OVN_OBSERV_ENABLE:-false}
 
 # Determine the ovn rundir.
 if [[ -f /usr/bin/ovn-appctl ]]; then
@@ -1256,6 +1262,12 @@ ovn-master() {
   fi
   echo "ovn_enable_svc_template_support_flag=${ovn_enable_svc_template_support_flag}"
 
+  ovn_observ_enable_flag=
+  if [[ ${ovn_observ_enable} == "true" ]]; then
+    ovn_observ_enable_flag="--enable-observability"
+  fi
+  echo "ovn_observ_enable_flag=${ovn_observ_enable_flag}"
+
   init_node_flags=
   if [[ ${ovnkube_compact_mode_enable} == "true" ]]; then
     init_node_flags="--init-node ${K8S_NODE} --nodeport"
@@ -1270,6 +1282,12 @@ ovn-master() {
 	  persistent_ips_enabled_flag="--enable-persistent-ips"
   fi
   echo "persistent_ips_enabled_flag: ${persistent_ips_enabled_flag}"
+
+  ovn_enable_dnsnameresolver_flag=
+  if [[ ${ovn_enable_dnsnameresolver} == "true" ]]; then
+	  ovn_enable_dnsnameresolver_flag="--enable-dns-name-resolver"
+  fi
+  echo "ovn_enable_dnsnameresolver_flag=${ovn_enable_dnsnameresolver_flag}"
 
   /usr/bin/ovnkube --init-master ${K8S_NODE} \
     ${anp_enabled_flag} \
@@ -1289,6 +1307,7 @@ ovn-master() {
     ${network_segmentation_enabled_flag} \
     ${ovn_acl_logging_rate_limit_flag} \
     ${ovn_enable_svc_template_support_flag} \
+    ${ovn_observ_enable_flag} \
     ${ovnkube_config_duration_enable_flag} \
     ${ovnkube_enable_multi_external_gateway_flag} \
     ${ovnkube_metrics_scale_enable_flag} \
@@ -1300,6 +1319,7 @@ ovn-master() {
     ${ovn_v6_join_subnet_opt} \
     ${ovn_v6_masquerade_subnet_opt} \
     ${persistent_ips_enabled_flag} \
+    ${ovn_enable_dnsnameresolver_flag} \
     --cluster-subnets ${net_cidr} --k8s-service-cidr=${svc_cidr} \
     --gateway-mode=${ovn_gateway_mode} ${ovn_gateway_opts} \
     --host-network-namespace ${ovn_host_network_namespace} \
@@ -1545,6 +1565,18 @@ ovnkube-controller() {
   fi
   echo "ovn_enable_svc_template_support_flag=${ovn_enable_svc_template_support_flag}"
 
+  ovn_enable_dnsnameresolver_flag=
+  if [[ ${ovn_enable_dnsnameresolver} == "true" ]]; then
+	  ovn_enable_dnsnameresolver_flag="--enable-dns-name-resolver"
+  fi
+  echo "ovn_enable_dnsnameresolver_flag=${ovn_enable_dnsnameresolver_flag}"
+
+  ovn_observ_enable_flag=
+  if [[ ${ovn_observ_enable} == "true" ]]; then
+    ovn_observ_enable_flag="--enable-observability"
+  fi
+  echo "ovn_observ_enable_flag=${ovn_observ_enable_flag}"
+
   echo "=============== ovnkube-controller ========== MASTER ONLY"
   /usr/bin/ovnkube --init-ovnkube-controller ${K8S_NODE} \
     ${anp_enabled_flag} \
@@ -1563,6 +1595,7 @@ ovnkube-controller() {
     ${ovn_acl_logging_rate_limit_flag} \
     ${ovn_dbs} \
     ${ovn_enable_svc_template_support_flag} \
+    ${ovn_observ_enable_flag} \
     ${ovnkube_config_duration_enable_flag} \
     ${ovnkube_enable_interconnect_flag} \
     ${ovnkube_local_cert_flags} \
@@ -1575,6 +1608,7 @@ ovnkube-controller() {
     ${ovn_v4_masquerade_subnet_opt} \
     ${ovn_v6_join_subnet_opt} \
     ${ovn_v6_masquerade_subnet_opt} \
+    ${ovn_enable_dnsnameresolver_flag} \
     --cluster-subnets ${net_cidr} --k8s-service-cidr=${svc_cidr} \
     --gateway-mode=${ovn_gateway_mode} \
     --host-network-namespace ${ovn_host_network_namespace} \
@@ -1937,6 +1971,18 @@ ovnkube-controller-with-node() {
   fi
   echo "ovn_enable_svc_template_support_flag=${ovn_enable_svc_template_support_flag}"
 
+  ovn_enable_dnsnameresolver_flag=
+  if [[ ${ovn_enable_dnsnameresolver} == "true" ]]; then
+	  ovn_enable_dnsnameresolver_flag="--enable-dns-name-resolver"
+  fi
+  echo "ovn_enable_dnsnameresolver_flag=${ovn_enable_dnsnameresolver_flag}"
+
+  ovn_observ_enable_flag=
+  if [[ ${ovn_observ_enable} == "true" ]]; then
+    ovn_observ_enable_flag="--enable-observability"
+  fi
+  echo "ovn_observ_enable_flag=${ovn_observ_enable_flag}"
+
   echo "=============== ovnkube-controller-with-node --init-ovnkube-controller-with-node=========="
   /usr/bin/ovnkube --init-ovnkube-controller ${K8S_NODE} --init-node ${K8S_NODE} \
     ${anp_enabled_flag} \
@@ -1967,6 +2013,7 @@ ovnkube-controller-with-node() {
     ${ovn_acl_logging_rate_limit_flag} \
     ${ovn_dbs} \
     ${ovn_enable_svc_template_support_flag} \
+    ${ovn_observ_enable_flag} \
     ${ovn_encap_ip_flag} \
     ${ovn_encap_port_flag} \
     ${ovnkube_config_duration_enable_flag} \
@@ -1985,9 +2032,10 @@ ovnkube-controller-with-node() {
     ${routable_mtu_flag} \
     ${sflow_targets} \
     ${ssl_opts} \
+    ${ovn_enable_dnsnameresolver_flag} \
     --cluster-subnets ${net_cidr} --k8s-service-cidr=${svc_cidr} \
     --export-ovs-metrics \
-    --gateway-mode=${ovn_gateway_mode} \
+    --gateway-mode=${ovn_gateway_mode} ${ovn_gateway_opts} \
     --gateway-router-subnet=${ovn_gateway_router_subnet} \
     --host-network-namespace ${ovn_host_network_namespace} \
     --inactivity-probe=${ovn_remote_probe_interval} \
@@ -2160,6 +2208,12 @@ ovn-cluster-manager() {
   fi
   echo "empty_lb_events_flag=${empty_lb_events_flag}"
 
+  ovn_enable_dnsnameresolver_flag=
+  if [[ ${ovn_enable_dnsnameresolver} == "true" ]]; then
+	  ovn_enable_dnsnameresolver_flag="--enable-dns-name-resolver"
+  fi
+  echo "ovn_enable_dnsnameresolver_flag=${ovn_enable_dnsnameresolver_flag}"
+
   echo "=============== ovn-cluster-manager ========== MASTER ONLY"
   /usr/bin/ovnkube --init-cluster-manager ${K8S_NODE} \
     ${anp_enabled_flag} \
@@ -2184,6 +2238,7 @@ ovn-cluster-manager() {
     ${ovn_v6_masquerade_subnet_opt} \
     ${ovn_v4_transit_switch_subnet_opt} \
     ${ovn_v6_transit_switch_subnet_opt} \
+    ${ovn_enable_dnsnameresolver_flag} \
     --cluster-subnets ${net_cidr} --k8s-service-cidr=${svc_cidr} \
     --host-network-namespace ${ovn_host_network_namespace} \
     --logfile-maxage=${ovnkube_logfile_maxage} \
@@ -2497,6 +2552,16 @@ ovn-node() {
   fi
   echo "ovn_conntrack_zone_flag=${ovn_conntrack_zone_flag}"
 
+  ovn_v4_masquerade_subnet_opt=
+  if [[ -n ${ovn_v4_masquerade_subnet} ]]; then
+      ovn_v4_masquerade_subnet_opt="--gateway-v4-masquerade-subnet=${ovn_v4_masquerade_subnet}"
+  fi
+
+  ovn_v6_masquerade_subnet_opt=
+  if [[ -n ${ovn_v6_masquerade_subnet} ]]; then
+    ovn_v6_masquerade_subnet_opt="--gateway-v6-masquerade-subnet=${ovn_v6_masquerade_subnet}"
+  fi
+
   echo "=============== ovn-node   --init-node"
   /usr/bin/ovnkube --init-node ${K8S_NODE} \
         ${anp_enabled_flag} \
@@ -2526,6 +2591,8 @@ ovn-node() {
         ${ovn_conntrack_zone_flag} \
         ${ovnkube_enable_interconnect_flag} \
         ${ovnkube_enable_multi_external_gateway_flag} \
+        ${ovn_v4_masquerade_subnet_opt} \
+        ${ovn_v6_masquerade_subnet_opt} \
         ${ovnkube_metrics_tls_opts} \
         ${ovnkube_node_certs_flags} \
         ${ovnkube_node_mgmt_port_netdev_flag} \

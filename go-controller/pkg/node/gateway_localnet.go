@@ -26,6 +26,11 @@ func newLocalGateway(nodeName string, hostSubnets []*net.IPNet, gwNextHops []net
 	klog.Info("Creating new local gateway")
 	gw := &gateway{}
 
+	if util.IsNetworkSegmentationSupportEnabled() {
+		if err := ensureChain("nat", iptableUDNMasqueradeChain); err != nil {
+			return nil, fmt.Errorf("failed to ensure chain %s in NAT table: %w", iptableUDNMasqueradeChain, err)
+		}
+	}
 	for _, hostSubnet := range hostSubnets {
 		// local gateway mode uses mp0 as default path for all ingress traffic into OVN
 		var nextHop *net.IPNet
@@ -58,19 +63,38 @@ func newLocalGateway(nodeName string, hostSubnets []*net.IPNet, gwNextHops []net
 
 	if exGwBridge != nil {
 		gw.readyFunc = func() (bool, error) {
-			ready, err := gatewayReady(gwBridge.patchPort)
-			if err != nil {
-				return false, err
+			gwBridge.Lock()
+			for _, netConfig := range gwBridge.netConfig {
+				ready, err := gatewayReady(netConfig.patchPort)
+				if err != nil || !ready {
+					gwBridge.Unlock()
+					return false, err
+				}
 			}
-			exGWReady, err := gatewayReady(exGwBridge.patchPort)
-			if err != nil {
-				return false, err
+			gwBridge.Unlock()
+			exGwBridge.Lock()
+			for _, netConfig := range exGwBridge.netConfig {
+				exGWReady, err := gatewayReady(netConfig.patchPort)
+				if err != nil || !exGWReady {
+					exGwBridge.Unlock()
+					return false, err
+				}
 			}
-			return ready && exGWReady, nil
+			exGwBridge.Unlock()
+			return true, nil
 		}
 	} else {
 		gw.readyFunc = func() (bool, error) {
-			return gatewayReady(gwBridge.patchPort)
+			gwBridge.Lock()
+			for _, netConfig := range gwBridge.netConfig {
+				ready, err := gatewayReady(netConfig.patchPort)
+				if err != nil || !ready {
+					gwBridge.Unlock()
+					return false, err
+				}
+			}
+			gwBridge.Unlock()
+			return true, nil
 		}
 	}
 
@@ -90,12 +114,24 @@ func newLocalGateway(nodeName string, hostSubnets []*net.IPNet, gwNextHops []net
 
 		gw.nodeIPManager = newAddressManager(nodeName, kube, cfg, watchFactory, gwBridge)
 
+		// Delete stale masquerade resources if there are any. This is to make sure that there
+		// are no Linux resouces with IP from old masquerade subnet when masquerade subnet
+		// gets changed as part of day2 operation.
+		if err := deleteStaleMasqueradeResources(gwBridge.bridgeName, nodeName, watchFactory); err != nil {
+			return fmt.Errorf("failed to remove stale masquerade resources: %w", err)
+		}
+
 		if err := setNodeMasqueradeIPOnExtBridge(gwBridge.bridgeName); err != nil {
 			return fmt.Errorf("failed to set the node masquerade IP on the ext bridge %s: %v", gwBridge.bridgeName, err)
 		}
 
 		if err := addMasqueradeRoute(routeManager, gwBridge.bridgeName, nodeName, gwIPs, watchFactory); err != nil {
 			return fmt.Errorf("failed to set the node masquerade route to OVN: %v", err)
+		}
+
+		// Masquerade config mostly done on node, update annotation
+		if err := updateMasqueradeAnnotation(nodeName, kube); err != nil {
+			return fmt.Errorf("failed to update masquerade subnet annotation on node: %s, error: %v", nodeName, err)
 		}
 
 		gw.openflowManager, err = newGatewayOpenFlowManager(gwBridge, exGwBridge, hostSubnets, gw.nodeIPManager.ListAddresses())

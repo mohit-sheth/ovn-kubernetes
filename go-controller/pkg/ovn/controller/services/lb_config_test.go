@@ -7,8 +7,9 @@ import (
 	"time"
 
 	globalconfig "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
-	kube_test "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing"
+	kubetest "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/types"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 	"github.com/stretchr/testify/assert"
 
 	v1 "k8s.io/api/core/v1"
@@ -21,8 +22,6 @@ import (
 )
 
 var (
-	nodeA        = "node-a"
-	nodeB        = "node-b"
 	defaultNodes = []nodeInfo{
 		{
 			name:               nodeA,
@@ -39,9 +38,6 @@ var (
 			switchName:         "switch-node-b",
 		},
 	}
-
-	tcpv1 = v1.ProtocolTCP
-	udpv1 = v1.ProtocolUDP
 
 	httpPortName    string = "http"
 	httpPortValue   int32  = int32(80)
@@ -140,8 +136,6 @@ func Test_buildServiceLBConfigs(t *testing.T) {
 	inport1 := int32(81)
 	outport1 := int32(8081)
 	outportstr := intstr.FromInt(int(outport))
-	tcp := v1.ProtocolTCP
-	udp := v1.ProtocolUDP
 
 	// make slices
 	// nil slice = don't use this family
@@ -172,7 +166,7 @@ func Test_buildServiceLBConfigs(t *testing.T) {
 					Name:     &portName,
 				}},
 				AddressType: discovery.AddressTypeIPv4,
-				Endpoints:   kube_test.MakeReadyEndpointList(nodeA, v4ips...),
+				Endpoints:   kubetest.MakeReadyEndpointList(nodeA, v4ips...),
 			})
 		}
 
@@ -200,7 +194,7 @@ func Test_buildServiceLBConfigs(t *testing.T) {
 					Name:     &portName,
 				}},
 				AddressType: discovery.AddressTypeIPv6,
-				Endpoints:   kube_test.MakeReadyEndpointList(nodeA, v6ips...),
+				Endpoints:   kubetest.MakeReadyEndpointList(nodeA, v6ips...),
 			})
 		}
 
@@ -361,7 +355,7 @@ func Test_buildServiceLBConfigs(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.128.0.2", "10.128.1.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.128.0.2", "10.128.1.2"),
 					},
 				},
 				service: &v1.Service{
@@ -433,7 +427,7 @@ func Test_buildServiceLBConfigs(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.128.0.2", "10.128.1.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.128.0.2", "10.128.1.2"),
 					},
 				},
 				service: &v1.Service{
@@ -900,8 +894,8 @@ func Test_buildServiceLBConfigs(t *testing.T) {
 			args: args{
 				slices: makeV4SliceWithEndpoints(
 					v1.ProtocolTCP,
-					kube_test.MakeReadyEndpoint(nodeA, "10.128.0.2"),
-					kube_test.MakeReadyEndpoint(nodeB, "10.128.1.2"),
+					kubetest.MakeReadyEndpoint(nodeA, "10.128.0.2"),
+					kubetest.MakeReadyEndpoint(nodeB, "10.128.1.2"),
 				),
 				service: &v1.Service{
 					ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: ns},
@@ -1002,8 +996,8 @@ func Test_buildServiceLBConfigs(t *testing.T) {
 			name: "LB service with NodePort, port, two endpoints, external ips + lb status, ExternalTrafficPolicy=local, one endpoint is ready, the other one is terminating and serving",
 			args: args{
 				slices: makeV4SliceWithEndpoints(v1.ProtocolTCP,
-					kube_test.MakeReadyEndpoint(nodeA, "10.128.0.2"),
-					kube_test.MakeTerminatingServingEndpoint(nodeB, "10.128.1.2")),
+					kubetest.MakeReadyEndpoint(nodeA, "10.128.0.2"),
+					kubetest.MakeTerminatingServingEndpoint(nodeB, "10.128.1.2")),
 				service: &v1.Service{
 					ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: ns},
 					Spec: v1.ServiceSpec{
@@ -1101,8 +1095,8 @@ func Test_buildServiceLBConfigs(t *testing.T) {
 			name: "LB service with NodePort, one port, two endpoints, external ips + lb status, ExternalTrafficPolicy=local, both endpoints terminating: one is serving, the other one is not",
 			args: args{
 				slices: makeV4SliceWithEndpoints(v1.ProtocolTCP,
-					kube_test.MakeTerminatingServingEndpoint(nodeA, "10.128.0.2"),
-					kube_test.MakeTerminatingNonServingEndpoint(nodeB, "10.128.1.2")),
+					kubetest.MakeTerminatingServingEndpoint(nodeA, "10.128.0.2"),
+					kubetest.MakeTerminatingNonServingEndpoint(nodeB, "10.128.1.2")),
 				service: &v1.Service{
 					ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: ns},
 					Spec: v1.ServiceSpec{
@@ -1189,7 +1183,7 @@ func Test_buildServiceLBConfigs(t *testing.T) {
 		t.Run(fmt.Sprintf("%d_%s", i, tt.name), func(t *testing.T) {
 			// shared gateway mode
 			globalconfig.Gateway.Mode = globalconfig.GatewayModeShared
-			perNode, template, clusterWide := buildServiceLBConfigs(tt.args.service, tt.args.slices, defaultNodes, true, true)
+			perNode, template, clusterWide := buildServiceLBConfigs(tt.args.service, tt.args.slices, defaultNodes, true, true, types.DefaultNetworkName)
 
 			assert.EqualValues(t, tt.resultSharedGatewayNode, perNode, "SGW per-node configs should be equal")
 			assert.EqualValues(t, tt.resultSharedGatewayTemplate, template, "SGW template configs should be equal")
@@ -1197,7 +1191,8 @@ func Test_buildServiceLBConfigs(t *testing.T) {
 
 			// local gateway mode
 			globalconfig.Gateway.Mode = globalconfig.GatewayModeLocal
-			perNode, template, clusterWide = buildServiceLBConfigs(tt.args.service, tt.args.slices, defaultNodes, true, true)
+
+			perNode, template, clusterWide = buildServiceLBConfigs(tt.args.service, tt.args.slices, defaultNodes, true, true, types.DefaultNetworkName)
 			if tt.resultsSame {
 				assert.EqualValues(t, tt.resultSharedGatewayNode, perNode, "LGW per-node configs should be equal")
 				assert.EqualValues(t, tt.resultSharedGatewayTemplate, template, "LGW template configs should be equal")
@@ -1216,8 +1211,10 @@ func Test_buildClusterLBs(t *testing.T) {
 	namespace := "testns"
 
 	oldGwMode := globalconfig.Gateway.Mode
+	oldIPv4Mode := globalconfig.IPv4Mode
 	defer func() {
 		globalconfig.Gateway.Mode = oldGwMode
+		globalconfig.IPv4Mode = oldIPv4Mode
 	}()
 	globalconfig.Gateway.Mode = globalconfig.GatewayModeShared
 
@@ -1228,15 +1225,15 @@ func Test_buildClusterLBs(t *testing.T) {
 		},
 	}
 
-	defaultExternalIDs := map[string]string{
-		types.LoadBalancerKindExternalID:  "Service",
-		types.LoadBalancerOwnerExternalID: fmt.Sprintf("%s/%s", namespace, name),
-	}
-
 	defaultRouters := []string{}
 	defaultSwitches := []string{}
-	defaultGroups := []string{"clusterLBGroup"}
+	defaultGroups := []string{types.ClusterLBGroupName}
 	defaultOpts := LBOpts{Reject: true}
+
+	globalconfig.IPv4Mode = true
+	UDNNetInfo, err := getSampleUDNNetInfo(namespace)
+	assert.Equal(t, err, nil)
+	UDNGroups := []string{UDNNetInfo.GetNetworkScopedLoadBalancerGroupName(types.ClusterLBGroupName)}
 
 	tc := []struct {
 		name      string
@@ -1285,7 +1282,7 @@ func Test_buildClusterLBs(t *testing.T) {
 				{
 					Name:        fmt.Sprintf("Service_%s/%s_TCP_cluster", namespace, name),
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Rules: []LBRule{
 						{
 							Source:  Addr{IP: "1.2.3.4", Port: 80},
@@ -1344,7 +1341,7 @@ func Test_buildClusterLBs(t *testing.T) {
 				{
 					Name:        fmt.Sprintf("Service_%s/%s_TCP_cluster", namespace, name),
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Rules: []LBRule{
 						{
 							Source:  Addr{IP: "1.2.3.4", Port: 80},
@@ -1360,7 +1357,7 @@ func Test_buildClusterLBs(t *testing.T) {
 				{
 					Name:        fmt.Sprintf("Service_%s/%s_UDP_cluster", namespace, name),
 					Protocol:    "UDP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Rules: []LBRule{
 						{
 							Source:  Addr{IP: "1.2.3.4", Port: 443},
@@ -1421,7 +1418,7 @@ func Test_buildClusterLBs(t *testing.T) {
 				{
 					Name:        fmt.Sprintf("Service_%s/%s_TCP_cluster", namespace, name),
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Rules: []LBRule{
 						{
 							Source:  Addr{IP: "1.2.3.4", Port: 80},
@@ -1451,7 +1448,19 @@ func Test_buildClusterLBs(t *testing.T) {
 	}
 	for i, tt := range tc {
 		t.Run(fmt.Sprintf("%d_%s", i, tt.name), func(t *testing.T) {
-			actual := buildClusterLBs(tt.service, tt.configs, tt.nodeInfos, true)
+
+			// default network
+			actual := buildClusterLBs(tt.service, tt.configs, tt.nodeInfos, true, &util.DefaultNetInfo{})
+			assert.Equal(t, tt.expected, actual)
+
+			// UDN
+			UDNExternalIDs := loadBalancerExternalIDsForNetwork(namespacedServiceName(namespace, name), UDNNetInfo.GetNetworkName())
+			for idx := range tt.expected {
+				tt.expected[idx].ExternalIDs = UDNExternalIDs
+				tt.expected[idx].Groups = UDNGroups
+				tt.expected[idx].Name = UDNNetInfo.GetNetworkScopedLoadBalancerName(tt.expected[idx].Name)
+			}
+			actual = buildClusterLBs(tt.service, tt.configs, tt.nodeInfos, true, UDNNetInfo)
 			assert.Equal(t, tt.expected, actual)
 		})
 	}
@@ -1461,7 +1470,9 @@ func Test_buildPerNodeLBs(t *testing.T) {
 	oldClusterSubnet := globalconfig.Default.ClusterSubnets
 	oldGwMode := globalconfig.Gateway.Mode
 	oldServiceCIDRs := globalconfig.Kubernetes.ServiceCIDRs
+	oldIPv4Mode := globalconfig.IPv4Mode
 	defer func() {
+		globalconfig.IPv4Mode = oldIPv4Mode
 		globalconfig.Gateway.Mode = oldGwMode
 		globalconfig.Default.ClusterSubnets = oldClusterSubnet
 		globalconfig.Kubernetes.ServiceCIDRs = oldServiceCIDRs
@@ -1474,9 +1485,13 @@ func Test_buildPerNodeLBs(t *testing.T) {
 	_, svcCIDRv6, _ := net.ParseCIDR("fd92::0/80")
 
 	globalconfig.Kubernetes.ServiceCIDRs = []*net.IPNet{svcCIDRv4}
+	globalconfig.IPv4Mode = true
 
 	name := "foo"
 	namespace := "testns"
+
+	UDNNetInfo, err := getSampleUDNNetInfo(namespace)
+	assert.Equal(t, nil, err)
 
 	defaultService := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
@@ -1523,10 +1538,6 @@ func Test_buildPerNodeLBs(t *testing.T) {
 		},
 	}
 
-	defaultExternalIDs := map[string]string{
-		types.LoadBalancerKindExternalID:  "Service",
-		types.LoadBalancerOwnerExternalID: fmt.Sprintf("%s/%s", namespace, name),
-	}
 	defaultOpts := LBOpts{Reject: true}
 
 	//defaultRouters := []string{"gr-node-a", "gr-node-b"}
@@ -1562,7 +1573,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedShared: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -1575,7 +1586,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a_merged",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Switches:    []string{"switch-node-a", "switch-node-b"},
 					Protocol:    "TCP",
@@ -1609,7 +1620,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedShared: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router+switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
@@ -1627,7 +1638,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_router+switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
@@ -1643,7 +1654,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedLocal: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router+switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
@@ -1661,7 +1672,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_router+switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
@@ -1713,7 +1724,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedShared: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -1734,7 +1745,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -1755,7 +1766,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_router+switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
@@ -1775,7 +1786,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedLocal: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -1796,7 +1807,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -1817,7 +1828,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_router+switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
@@ -1880,7 +1891,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				// switch clusterip + nodeport
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -1893,7 +1904,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_local_router_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Opts:        LBOpts{SkipSNAT: true, Reject: true},
 					Protocol:    "TCP",
@@ -1910,7 +1921,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -1944,7 +1955,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				// switch clusterip + nodeport
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -1961,7 +1972,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2029,7 +2040,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedShared: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-a_merged",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a", "gr-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2046,7 +2057,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2063,7 +2074,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2082,7 +2093,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedLocal: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-a_merged",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a", "gr-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2099,7 +2110,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2116,7 +2127,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2180,7 +2191,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedShared: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2197,7 +2208,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2214,7 +2225,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2231,7 +2242,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2250,7 +2261,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedLocal: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2267,7 +2278,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2284,7 +2295,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2301,7 +2312,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2362,7 +2373,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedShared: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2375,7 +2386,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_local_router_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Opts:        LBOpts{SkipSNAT: true, Reject: true},
 					Protocol:    "TCP",
@@ -2392,7 +2403,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2421,7 +2432,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2438,7 +2449,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2461,7 +2472,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedLocal: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2474,7 +2485,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_local_router_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Opts:        LBOpts{SkipSNAT: true, Reject: true},
 					Protocol:    "TCP",
@@ -2491,7 +2502,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2520,7 +2531,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_router_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2537,7 +2548,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
 					Rules: []LBRule{
@@ -2610,7 +2621,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_local_router_node-a",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        LBOpts{SkipSNAT: true, Reject: true},
 
 					Rules: []LBRule{
@@ -2636,7 +2647,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        defaultOpts,
 					Rules: []LBRule{
 						{
@@ -2669,7 +2680,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_local_router_node-b",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        LBOpts{SkipSNAT: true, Reject: true},
 					Rules: []LBRule{
 						{
@@ -2690,7 +2701,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-b",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        defaultOpts,
 					Rules: []LBRule{
 						{
@@ -2753,7 +2764,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_local_router_node-a",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        LBOpts{SkipSNAT: true, Reject: true},
 
 					Rules: []LBRule{
@@ -2779,7 +2790,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        defaultOpts,
 					Rules: []LBRule{
 						{
@@ -2812,7 +2823,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_local_router_node-b",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        LBOpts{SkipSNAT: true, Reject: true},
 					Rules: []LBRule{
 						{
@@ -2833,7 +2844,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-b",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        defaultOpts,
 					Rules: []LBRule{
 						{
@@ -2888,7 +2899,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedShared: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router+switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
@@ -2906,7 +2917,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_router+switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
@@ -2922,7 +2933,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			expectedLocal: []LB{
 				{
 					Name:        "Service_testns/foo_TCP_node_router+switch_node-a",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-a"},
 					Switches:    []string{"switch-node-a"},
 					Protocol:    "TCP",
@@ -2940,7 +2951,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				},
 				{
 					Name:        "Service_testns/foo_TCP_node_router+switch_node-b",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Routers:     []string{"gr-node-b"},
 					Switches:    []string{"switch-node-b"},
 					Protocol:    "TCP",
@@ -2994,7 +3005,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_local_router_node-a",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        LBOpts{SkipSNAT: true, Reject: true},
 
 					Rules: []LBRule{
@@ -3020,7 +3031,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-a",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        defaultOpts,
 					Rules: []LBRule{
 						{
@@ -3053,7 +3064,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_local_router_node-b",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        LBOpts{SkipSNAT: true, Reject: true},
 					Rules: []LBRule{
 						{
@@ -3074,7 +3085,7 @@ func Test_buildPerNodeLBs(t *testing.T) {
 				{
 					Name:        "Service_testns/foo_TCP_node_switch_node-b",
 					Protocol:    "TCP",
-					ExternalIDs: defaultExternalIDs,
+					ExternalIDs: loadBalancerExternalIDs(namespacedServiceName(namespace, name)),
 					Opts:        defaultOpts,
 					Rules: []LBRule{
 						{
@@ -3099,19 +3110,42 @@ func Test_buildPerNodeLBs(t *testing.T) {
 			},
 		},
 	}
+
+	UDNExternalIDs := loadBalancerExternalIDsForNetwork(namespacedServiceName(namespace, name), UDNNetInfo.GetNetworkName())
+
 	// v4
 	for i, tt := range tc {
 		t.Run(fmt.Sprintf("%d_%s", i, tt.name), func(t *testing.T) {
-
 			if tt.expectedShared != nil {
 				globalconfig.Gateway.Mode = globalconfig.GatewayModeShared
-				actual := buildPerNodeLBs(tt.service, tt.configs, defaultNodes)
+				// cluster default network
+				actual := buildPerNodeLBs(tt.service, tt.configs, defaultNodes, &util.DefaultNetInfo{})
+				assert.Equal(t, tt.expectedShared, actual, "shared gateway mode not as expected")
+
+				// UDN
+				for idx := range tt.expectedShared {
+					tt.expectedShared[idx].ExternalIDs = UDNExternalIDs
+					tt.expectedShared[idx].Name = UDNNetInfo.GetNetworkScopedLoadBalancerName(tt.expectedShared[idx].Name)
+
+				}
+				actual = buildPerNodeLBs(tt.service, tt.configs, defaultNodes, UDNNetInfo)
 				assert.Equal(t, tt.expectedShared, actual, "shared gateway mode not as expected")
 			}
 
 			if tt.expectedLocal != nil {
 				globalconfig.Gateway.Mode = globalconfig.GatewayModeLocal
-				actual := buildPerNodeLBs(tt.service, tt.configs, defaultNodes)
+
+				// cluster default network
+				actual := buildPerNodeLBs(tt.service, tt.configs, defaultNodes, &util.DefaultNetInfo{})
+				assert.Equal(t, tt.expectedLocal, actual, "local gateway mode not as expected")
+
+				// UDN
+				for idx := range tt.expectedLocal {
+					tt.expectedLocal[idx].ExternalIDs = UDNExternalIDs
+					tt.expectedLocal[idx].Name = UDNNetInfo.GetNetworkScopedLoadBalancerName(tt.expectedLocal[idx].Name)
+
+				}
+				actual = buildPerNodeLBs(tt.service, tt.configs, defaultNodes, UDNNetInfo)
 				assert.Equal(t, tt.expectedLocal, actual, "local gateway mode not as expected")
 			}
 
@@ -3125,14 +3159,36 @@ func Test_buildPerNodeLBs(t *testing.T) {
 
 			if tt.expectedShared != nil {
 				globalconfig.Gateway.Mode = globalconfig.GatewayModeShared
-				actual := buildPerNodeLBs(tt.service, tt.configs, defaultNodesV6)
+
+				// cluster default network
+				actual := buildPerNodeLBs(tt.service, tt.configs, defaultNodesV6, &util.DefaultNetInfo{})
 				assert.Equal(t, tt.expectedShared, actual, "shared gateway mode not as expected")
+
+				// UDN
+				for idx := range tt.expectedShared {
+					tt.expectedShared[idx].ExternalIDs = UDNExternalIDs
+					tt.expectedShared[idx].Name = UDNNetInfo.GetNetworkScopedLoadBalancerName(tt.expectedShared[idx].Name)
+
+				}
+				actual = buildPerNodeLBs(tt.service, tt.configs, defaultNodesV6, UDNNetInfo)
+				assert.Equal(t, tt.expectedShared, actual, "shared gateway mode not as expected for UDN")
 			}
 
 			if tt.expectedLocal != nil {
 				globalconfig.Gateway.Mode = globalconfig.GatewayModeLocal
-				actual := buildPerNodeLBs(tt.service, tt.configs, defaultNodesV6)
+
+				// cluster default network
+				actual := buildPerNodeLBs(tt.service, tt.configs, defaultNodesV6, &util.DefaultNetInfo{})
 				assert.Equal(t, tt.expectedLocal, actual, "local gateway mode not as expected")
+
+				// UDN
+				for idx := range tt.expectedLocal {
+					tt.expectedLocal[idx].ExternalIDs = UDNExternalIDs
+					tt.expectedLocal[idx].Name = UDNNetInfo.GetNetworkScopedLoadBalancerName(tt.expectedLocal[idx].Name)
+
+				}
+				actual = buildPerNodeLBs(tt.service, tt.configs, defaultNodesV6, UDNNetInfo)
+				assert.Equal(t, tt.expectedLocal, actual, "local gateway mode not as expected for UDN")
 			}
 
 		})
@@ -3229,7 +3285,7 @@ func Test_getEndpointsForService(t *testing.T) {
 			name: "empty slices",
 			args: args{
 				slices: []*discovery.EndpointSlice{},
-				svc:    getSampleServiceWithOnePort(httpPortName, httpPortValue, tcpv1),
+				svc:    getSampleServiceWithOnePort(httpPortName, httpPortValue, tcp),
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{},            // no cluster-wide endpoints
 			wantNodeEndpoints:    map[string]map[string]lbEndpoints{}, // no local endpoints
@@ -3247,19 +3303,19 @@ func Test_getEndpointsForService(t *testing.T) {
 						Ports: []discovery.EndpointPort{
 							{
 								Name:     ptr.To("tcp-example"),
-								Protocol: &tcpv1,
+								Protocol: &tcp,
 								Port:     ptr.To(int32(80)),
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.0.0.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.0.0.2"),
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}}, // one cluster-wide endpoint
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}}, // one cluster-wide endpoint
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{}, // no need for local endpoints, service is not ETP or ITP local
 		},
 		{
@@ -3275,21 +3331,21 @@ func Test_getEndpointsForService(t *testing.T) {
 						Ports: []discovery.EndpointPort{
 							{
 								Name:     ptr.To("tcp-example"),
-								Protocol: &tcpv1,
+								Protocol: &tcp,
 								Port:     ptr.To(int32(80)),
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.0.0.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.0.0.2"),
 					},
 				},
-				svc:   getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}}, // one cluster-wide endpoint
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}}, // one cluster-wide endpoint
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.2"}, Port: 80}}}, // ETP=local, one local endpoint
+				getServicePortKey(tcp, "tcp-example"): {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.2"}, Port: 80}}}, // ETP=local, one local endpoint
 		},
 		{
 			name: "slice with one non-local endpoint, ETP=local",
@@ -3304,19 +3360,19 @@ func Test_getEndpointsForService(t *testing.T) {
 						Ports: []discovery.EndpointPort{
 							{
 								Name:     ptr.To("tcp-example"),
-								Protocol: &tcpv1,
+								Protocol: &tcp,
 								Port:     ptr.To(int32(80)),
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeB, "10.0.0.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeB, "10.0.0.2"),
 					},
 				},
-				svc:   getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}}, // one cluster-wide endpoint
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}}, // one cluster-wide endpoint
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{}, // ETP=local but no local endpoint
 		},
 		{
@@ -3332,15 +3388,15 @@ func Test_getEndpointsForService(t *testing.T) {
 						Ports: []discovery.EndpointPort{
 							{
 								Name:     ptr.To("tcp-example"),
-								Protocol: &tcpv1,
+								Protocol: &tcp,
 								Port:     ptr.To(int32(80)),
 							},
 						},
 						AddressType: discovery.AddressTypeFQDN,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "example.com"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "example.com"),
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{},            // no endpoints
@@ -3359,21 +3415,21 @@ func Test_getEndpointsForService(t *testing.T) {
 						Ports: []discovery.EndpointPort{
 							{
 								Name:     ptr.To("tcp-example"),
-								Protocol: &tcpv1,
+								Protocol: &tcp,
 								Port:     ptr.To(int32(80)),
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeB, "10.0.0.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeB, "10.0.0.2"),
 					},
 				},
-				svc:   getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA, nodeB), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}}, // one cluster-wide endpoint
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}}, // one cluster-wide endpoint
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {nodeB: lbEndpoints{V4IPs: []string{"10.0.0.2"}, Port: 80}}}, // endpoint on nodeB
+				getServicePortKey(tcp, "tcp-example"): {nodeB: lbEndpoints{V4IPs: []string{"10.0.0.2"}, Port: 80}}}, // endpoint on nodeB
 		},
 		{
 			name: "slice with different port name than the service",
@@ -3393,10 +3449,10 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.0.0.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.0.0.2"),
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{},            // no cluster-wide endpoints
@@ -3414,22 +3470,22 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						Ports: []discovery.EndpointPort{
 							{
-								Protocol: &tcpv1,
+								Protocol: &tcp,
 								Port:     ptr.To(int32(8080)),
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.0.0.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.0.0.2"),
 					},
 				},
-				svc:   getSampleServiceWithOnePortAndETPLocal("", 80, tcpv1), // port with no name
-				nodes: sets.New(nodeA),                                       // one-node zone
+				svc:   getSampleServiceWithOnePortAndETPLocal("", 80, tcp), // port with no name
+				nodes: sets.New(nodeA),                                     // one-node zone
 
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, ""): {V4IPs: []string{"10.0.0.2"}, Port: 8080}}, // one cluster-wide endpoint
+				getServicePortKey(tcp, ""): {V4IPs: []string{"10.0.0.2"}, Port: 8080}}, // one cluster-wide endpoint
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{
-				getServicePortKey(tcpv1, ""): {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.2"}, Port: 8080}}}, // one local endpoint
+				getServicePortKey(tcp, ""): {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.2"}, Port: 8080}}}, // one local endpoint
 		},
 		{
 			name: "slice with an IPv6 endpoint",
@@ -3449,14 +3505,14 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv6,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "2001:db2::2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "2001:db2::2"),
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V6IPs: []string{"2001:db2::2"}, Port: 80}}, // one cluster-wide endpoint
+				getServicePortKey(tcp, "tcp-example"): {V6IPs: []string{"2001:db2::2"}, Port: 80}}, // one cluster-wide endpoint
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{}, //  local endpoints not filled in, since service is not ETP or ITP local
 		},
 		{
@@ -3477,7 +3533,7 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.0.0.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.0.0.2"),
 					},
 					{
 						ObjectMeta: metav1.ObjectMeta{
@@ -3493,16 +3549,16 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv6,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "2001:db2::2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "2001:db2::2"),
 					},
 				},
-				svc:   getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, V6IPs: []string{"2001:db2::2"}, Port: 80}},
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, V6IPs: []string{"2001:db2::2"}, Port: 80}},
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.2"}, V6IPs: []string{"2001:db2::2"}, Port: 80}}},
+				getServicePortKey(tcp, "tcp-example"): {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.2"}, V6IPs: []string{"2001:db2::2"}, Port: 80}}},
 		},
 		{
 			name: "one slice with a duplicate address in the same endpoint",
@@ -3522,14 +3578,14 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.0.0.2", "10.0.0.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.0.0.2", "10.0.0.2"),
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}},
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}},
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{}, // local endpoints not filled in, since service is not ETP or ITP local
 		},
 		{
@@ -3550,14 +3606,14 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   []discovery.Endpoint{kube_test.MakeReadyEndpoint(nodeA, "10.0.0.2"), kube_test.MakeReadyEndpoint(nodeA, "10.0.0.2")},
+						Endpoints:   []discovery.Endpoint{kubetest.MakeReadyEndpoint(nodeA, "10.0.0.2"), kubetest.MakeReadyEndpoint(nodeA, "10.0.0.2")},
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}},
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, Port: 80}},
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{}, // local endpoints not filled in, since service is not ETP or ITP local
 		},
 		{
@@ -3578,7 +3634,7 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.0.0.2", "10.1.1.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.0.0.2", "10.1.1.2"),
 					},
 					{
 						ObjectMeta: metav1.ObjectMeta{
@@ -3594,14 +3650,14 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.0.0.2", "10.2.2.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.0.0.2", "10.2.2.2"),
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.2", "10.1.1.2", "10.2.2.2"}, Port: 80}},
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.2", "10.1.1.2", "10.2.2.2"}, Port: 80}},
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{}, // local endpoints not filled in, since service is not ETP or ITP local
 		},
 		{
@@ -3622,7 +3678,7 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.0.0.2", "10.1.1.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.0.0.2", "10.1.1.2"),
 					},
 					{
 						ObjectMeta: metav1.ObjectMeta{
@@ -3638,18 +3694,18 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.0.0.3", "10.2.2.3"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.0.0.3", "10.2.2.3"),
 					},
 				},
-				svc:   getSampleServiceWithTwoPortsAndETPLocal("tcp-example", "other-port", 80, 8080, tcpv1, tcpv1),
+				svc:   getSampleServiceWithTwoPortsAndETPLocal("tcp-example", "other-port", 80, 8080, tcp, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.2", "10.1.1.2"}, Port: 80},
-				getServicePortKey(tcpv1, "other-port"):  {V4IPs: []string{"10.0.0.3", "10.2.2.3"}, Port: 8080}},
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.2", "10.1.1.2"}, Port: 80},
+				getServicePortKey(tcp, "other-port"):  {V4IPs: []string{"10.0.0.3", "10.2.2.3"}, Port: 8080}},
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.2", "10.1.1.2"}, Port: 80}},
-				getServicePortKey(tcpv1, "other-port"):  {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.3", "10.2.2.3"}, Port: 8080}}},
+				getServicePortKey(tcp, "tcp-example"): {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.2", "10.1.1.2"}, Port: 80}},
+				getServicePortKey(tcp, "other-port"):  {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.3", "10.2.2.3"}, Port: 8080}}},
 		},
 		{
 			name: "multiples slices with different ports, OVN zone with two nodes, ETP=local",
@@ -3669,7 +3725,7 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeA, "10.0.0.2", "10.1.1.2"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeA, "10.0.0.2", "10.1.1.2"),
 					},
 					{
 						ObjectMeta: metav1.ObjectMeta{
@@ -3685,18 +3741,18 @@ func Test_getEndpointsForService(t *testing.T) {
 							},
 						},
 						AddressType: discovery.AddressTypeIPv4,
-						Endpoints:   kube_test.MakeReadyEndpointList(nodeB, "10.0.0.3", "10.2.2.3"),
+						Endpoints:   kubetest.MakeReadyEndpointList(nodeB, "10.0.0.3", "10.2.2.3"),
 					},
 				},
-				svc:   getSampleServiceWithTwoPortsAndETPLocal("tcp-example", "other-port", 80, 8080, tcpv1, tcpv1),
+				svc:   getSampleServiceWithTwoPortsAndETPLocal("tcp-example", "other-port", 80, 8080, tcp, tcp),
 				nodes: sets.New(nodeA, nodeB), // zone with two nodes
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.2", "10.1.1.2"}, Port: 80},
-				getServicePortKey(tcpv1, "other-port"):  {V4IPs: []string{"10.0.0.3", "10.2.2.3"}, Port: 8080}},
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.2", "10.1.1.2"}, Port: 80},
+				getServicePortKey(tcp, "other-port"):  {V4IPs: []string{"10.0.0.3", "10.2.2.3"}, Port: 8080}},
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.2", "10.1.1.2"}, Port: 80}},
-				getServicePortKey(tcpv1, "other-port"):  {nodeB: lbEndpoints{V4IPs: []string{"10.0.0.3", "10.2.2.3"}, Port: 8080}}},
+				getServicePortKey(tcp, "tcp-example"): {nodeA: lbEndpoints{V4IPs: []string{"10.0.0.2", "10.1.1.2"}, Port: 80}},
+				getServicePortKey(tcp, "other-port"):  {nodeB: lbEndpoints{V4IPs: []string{"10.0.0.3", "10.2.2.3"}, Port: 8080}}},
 		},
 		{
 			name: "slice with a mix of ready and terminating (serving and non-serving) endpoints",
@@ -3717,20 +3773,20 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv6,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeReadyEndpoint(nodeA, "2001:db2::2"),
-							kube_test.MakeReadyEndpoint(nodeA, "2001:db2::3"),
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "2001:db2::4"),
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "2001:db2::5"),
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::6"), // ignored
+							kubetest.MakeReadyEndpoint(nodeA, "2001:db2::2"),
+							kubetest.MakeReadyEndpoint(nodeA, "2001:db2::3"),
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "2001:db2::4"),
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "2001:db2::5"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::6"), // ignored
 						},
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V6IPs: []string{"2001:db2::2", "2001:db2::3"}, Port: 80}},
+				getServicePortKey(tcp, "tcp-example"): {V6IPs: []string{"2001:db2::2", "2001:db2::3"}, Port: 80}},
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{}, // local endpoints not filled in, since service is not ETP or ITP local
 		},
 		{
@@ -3752,18 +3808,18 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv6,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "2001:db2::4"),
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "2001:db2::5"),
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::6"),
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::7"),
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "2001:db2::4"),
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "2001:db2::5"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::6"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::7"),
 						},
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V6IPs: []string{"2001:db2::4", "2001:db2::5"}, Port: 80}},
+				getServicePortKey(tcp, "tcp-example"): {V6IPs: []string{"2001:db2::4", "2001:db2::5"}, Port: 80}},
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{}, // local endpoints not filled in, since service is not ETP or ITP local
 		},
 		{
@@ -3785,12 +3841,12 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv6,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::6"),
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::7"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::6"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::7"),
 						},
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{},            // no cluster-wide endpoints
@@ -3816,8 +3872,8 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv6,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::2"), // ignored
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "2001:db2::3"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::2"), // ignored
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "2001:db2::3"),
 						},
 					},
 					{
@@ -3835,16 +3891,16 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv6,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "2001:db2::4"),
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::5"), // ignored
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "2001:db2::4"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::5"), // ignored
 						},
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V6IPs: []string{"2001:db2::3", "2001:db2::4"}, Port: 80}},
+				getServicePortKey(tcp, "tcp-example"): {V6IPs: []string{"2001:db2::3", "2001:db2::4"}, Port: 80}},
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{}, // local endpoints not filled in, since service is not ETP or ITP local
 		},
 		{
@@ -3866,7 +3922,7 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv6,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::2"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::2"),
 						},
 					},
 					{
@@ -3884,11 +3940,11 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv6,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::5"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::5"),
 						},
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{},            // no cluster-wide endpoints
@@ -3914,9 +3970,9 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv4,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeReadyEndpoint(nodeA, "10.0.0.2"),
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "10.0.0.3"),
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "10.0.0.4"), // ignored
+							kubetest.MakeReadyEndpoint(nodeA, "10.0.0.2"),
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "10.0.0.3"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "10.0.0.4"), // ignored
 						},
 					},
 					{
@@ -3934,17 +3990,17 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv6,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeReadyEndpoint(nodeA, "2001:db2::2"),
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "2001:db2::3"),
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::4"), // ignored
+							kubetest.MakeReadyEndpoint(nodeA, "2001:db2::2"),
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "2001:db2::3"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::4"), // ignored
 						},
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, V6IPs: []string{"2001:db2::2"}, Port: 80}},
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.2"}, V6IPs: []string{"2001:db2::2"}, Port: 80}},
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{}, // local endpoints not filled in, since service is not ETP or ITP local
 		},
 		{
@@ -3966,8 +4022,8 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv4,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "10.0.0.3"),
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "10.0.0.4"),
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "10.0.0.3"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "10.0.0.4"),
 						},
 					},
 					{
@@ -3985,16 +4041,16 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv6,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "2001:db2::3"),
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::4"),
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "2001:db2::3"),
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::4"),
 						},
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {V4IPs: []string{"10.0.0.3"}, V6IPs: []string{"2001:db2::3"}, Port: 80}},
+				getServicePortKey(tcp, "tcp-example"): {V4IPs: []string{"10.0.0.3"}, V6IPs: []string{"2001:db2::3"}, Port: 80}},
 			wantNodeEndpoints: map[string]map[string]lbEndpoints{}, // local endpoints not filled in, since service is not ETP or ITP local
 		},
 		{
@@ -4016,7 +4072,7 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv4,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "10.0.0.4"), // ignored
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "10.0.0.4"), // ignored
 						},
 					},
 					{
@@ -4034,11 +4090,11 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv6,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::4"), // ignored
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::4"), // ignored
 						},
 					},
 				},
-				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcpv1),
+				svc:   getSampleServiceWithOnePort("tcp-example", 80, tcp),
 				nodes: sets.New(nodeA), // one-node zone
 
 			},
@@ -4064,9 +4120,9 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv4,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeReadyEndpoint(nodeA, "10.0.0.2"),                 // included
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "10.0.0.3"),    // included
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "10.0.0.4"), // included
+							kubetest.MakeReadyEndpoint(nodeA, "10.0.0.2"),                 // included
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "10.0.0.3"),    // included
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "10.0.0.4"), // included
 						},
 					},
 					{
@@ -4084,17 +4140,17 @@ func Test_getEndpointsForService(t *testing.T) {
 						},
 						AddressType: discovery.AddressTypeIPv6,
 						Endpoints: []discovery.Endpoint{
-							kube_test.MakeReadyEndpoint(nodeA, "2001:db2::2"),                 // included
-							kube_test.MakeTerminatingServingEndpoint(nodeA, "2001:db2::3"),    // included
-							kube_test.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::4"), // included
+							kubetest.MakeReadyEndpoint(nodeA, "2001:db2::2"),                 // included
+							kubetest.MakeTerminatingServingEndpoint(nodeA, "2001:db2::3"),    // included
+							kubetest.MakeTerminatingNonServingEndpoint(nodeA, "2001:db2::4"), // included
 						},
 					},
 				},
-				svc:   getSampleServiceWithOnePortAndPublishNotReadyAddresses("tcp-example", 80, tcpv1), // <-- publishNotReadyAddresses=true
-				nodes: sets.New(nodeA),                                                                  // one-node zone
+				svc:   getSampleServiceWithOnePortAndPublishNotReadyAddresses("tcp-example", 80, tcp), // <-- publishNotReadyAddresses=true
+				nodes: sets.New(nodeA),                                                                // one-node zone
 			},
 			wantClusterEndpoints: map[string]lbEndpoints{
-				getServicePortKey(tcpv1, "tcp-example"): {
+				getServicePortKey(tcp, "tcp-example"): {
 					V4IPs: []string{"10.0.0.2", "10.0.0.3", "10.0.0.4"},
 					V6IPs: []string{"2001:db2::2", "2001:db2::3", "2001:db2::4"}, Port: 80}},
 
@@ -4103,7 +4159,8 @@ func Test_getEndpointsForService(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			portToClusterEndpoints, portToNodeToEndpoints := getEndpointsForService(tt.args.slices, tt.args.svc, tt.args.nodes)
+			portToClusterEndpoints, portToNodeToEndpoints := getEndpointsForService(
+				tt.args.slices, tt.args.svc, tt.args.nodes, types.DefaultNetworkName)
 			assert.Equal(t, tt.wantClusterEndpoints, portToClusterEndpoints)
 			assert.Equal(t, tt.wantNodeEndpoints, portToNodeToEndpoints)
 
@@ -4167,7 +4224,7 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 		},
 		{
 			name:    "LB service with ETP=local, endpoint count changes",
-			service: getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcpv1),
+			service: getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcp),
 			config: &lbConfig{
 				vips:     []string{"1.2.3.4", "fe10::1"},
 				protocol: v1.ProtocolTCP,
@@ -4195,7 +4252,7 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 		},
 		{
 			name:    "LB service with ETP=local, endpoint count is the same",
-			service: getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcpv1),
+			service: getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcp),
 			config: &lbConfig{
 				vips:     []string{"1.2.3.4", "fe10::1"},
 				protocol: v1.ProtocolTCP,
@@ -4222,7 +4279,7 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 		},
 		{
 			name:    "LB service with ETP=local, no local endpoints left",
-			service: getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcpv1),
+			service: getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcp),
 			config: &lbConfig{
 				vips:     []string{"1.2.3.4", "fe10::1"},
 				protocol: v1.ProtocolTCP,
@@ -4244,7 +4301,7 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 		// OCP HACK BEGIN
 		{
 			name:    "LB service with ETP=local, no local endpoints left, localWithFallback annotation",
-			service: addFallbackAnnotationToService(getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcpv1)),
+			service: addFallbackAnnotationToService(getSampleServiceWithOnePortAndETPLocal("tcp-example", 80, tcp)),
 			config: &lbConfig{
 				vips:     []string{"1.2.3.4", "fe10::1"},
 				protocol: v1.ProtocolTCP,

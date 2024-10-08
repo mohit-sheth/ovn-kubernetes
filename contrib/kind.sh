@@ -78,6 +78,8 @@ usage() {
     echo "                 [-cm | --compact-mode]"
     echo "                 [-ic | --enable-interconnect]"
     echo "                 [--isolated]"
+    echo "                 [-dns | --enable-dnsnameresolver]"
+    echo "                 [-obs | --observability]"
     echo "                 [-h]]"
     echo ""
     echo "-cf  | --config-file                Name of the KIND J2 configuration file."
@@ -139,6 +141,8 @@ usage() {
     echo "--delete                            Delete current cluster"
     echo "--deploy                            Deploy ovn kubernetes without restarting kind"
     echo "--add-nodes                         Adds nodes to an existing cluster. The number of nodes to be added is specified by --num-workers. Also use -ic if the cluster is using interconnect."
+    echo "-dns | --enable-dnsnameresolver     Enable DNSNameResolver for resolving the DNS names used in the DNS rules of EgressFirewall."
+    echo "-obs | --observability              Enable OVN Observability feature."
     echo ""
 }
 
@@ -160,6 +164,8 @@ parse_args() {
             -pl | --install-cni-plugins )       KIND_INSTALL_PLUGINS=true
                                                 ;;
             -ikv | --install-kubevirt)          KIND_INSTALL_KUBEVIRT=true
+                                                ;;
+            -nokvipam | --opt-out-kv-ipam)      KIND_OPT_OUT_KUBEVIRT_IPAM=true
                                                 ;;
             -ha | --ha-enabled )                OVN_HA=true
                                                 ;;
@@ -196,6 +202,8 @@ parse_args() {
                                                 ;;
             -ifa | --ipfix-cache-active-timeout ) shift
                                                 OVN_IPFIX_CACHE_ACTIVE_TIMEOUT=$1
+                                                ;;
+            -obs | --observability )            OVN_OBSERV_ENABLE=true
                                                 ;;
             -el | --ovn-empty-lb-events )       OVN_EMPTY_LB_EVENTS=true
                                                 ;;
@@ -327,10 +335,13 @@ parse_args() {
             --add-nodes)                        KIND_ADD_NODES=true
                                                 KIND_CREATE=false
                                                 ;;
+            -dns | --enable-dnsnameresolver )   OVN_ENABLE_DNSNAMERESOLVER=true
+                                                ;;
             -h | --help )                       usage
                                                 exit
                                                 ;;
-            * )                                 usage
+            * )                                 echo "Invalid option: $1"
+                                                usage
                                                 exit 1
         esac
         shift
@@ -346,6 +357,7 @@ print_params() {
      echo "KIND_INSTALL_METALLB = $KIND_INSTALL_METALLB"
      echo "KIND_INSTALL_PLUGINS = $KIND_INSTALL_PLUGINS"
      echo "KIND_INSTALL_KUBEVIRT = $KIND_INSTALL_KUBEVIRT"
+     echo "KIND_OPT_OUT_KUBEVIRT_IPAM = $KIND_OPT_OUT_KUBEVIRT_IPAM"
      echo "OVN_HA = $OVN_HA"
      echo "RUN_IN_CONTAINER = $RUN_IN_CONTAINER"
      echo "KIND_CLUSTER_NAME = $KIND_CLUSTER_NAME"
@@ -373,6 +385,7 @@ print_params() {
      echo "OVN_IPFIX_SAMPLING = $OVN_IPFIX_SAMPLING"
      echo "OVN_IPFIX_CACHE_MAX_FLOWS = $OVN_IPFIX_CACHE_MAX_FLOWS"
      echo "OVN_IPFIX_CACHE_ACTIVE_TIMEOUT = $OVN_IPFIX_CACHE_ACTIVE_TIMEOUT"
+     echo "OVN_OBSERV_ENABLE = $OVN_OBSERV_ENABLE"
      echo "OVN_EMPTY_LB_EVENTS = $OVN_EMPTY_LB_EVENTS"
      echo "OVN_MULTICAST_ENABLE = $OVN_MULTICAST_ENABLE"
      echo "OVN_IMAGE = $OVN_IMAGE"
@@ -405,6 +418,7 @@ print_params() {
      echo "OVN_ENABLE_OVNKUBE_IDENTITY = $OVN_ENABLE_OVNKUBE_IDENTITY"
      echo "KIND_NUM_WORKER = $KIND_NUM_WORKER"
      echo "OVN_MTU= $OVN_MTU"
+     echo "OVN_ENABLE_DNSNAMERESOLVER= $OVN_ENABLE_DNSNAMERESOLVER"
      echo ""
 }
 
@@ -498,6 +512,7 @@ set_default_params() {
   KIND_INSTALL_METALLB=${KIND_INSTALL_METALLB:-false}
   KIND_INSTALL_PLUGINS=${KIND_INSTALL_PLUGINS:-false}
   KIND_INSTALL_KUBEVIRT=${KIND_INSTALL_KUBEVIRT:-false}
+  KIND_OPT_OUT_KUBEVIRT_IPAM=${KIND_OPT_OUT_KUBEVIRT_IPAM:-false}
   OVN_HA=${OVN_HA:-false}
   KIND_LOCAL_REGISTRY=${KIND_LOCAL_REGISTRY:-false}
   KIND_LOCAL_REGISTRY_NAME=${KIND_LOCAL_REGISTRY_NAME:-kind-registry}
@@ -543,8 +558,8 @@ set_default_params() {
   SVC_CIDR_IPV6=${SVC_CIDR_IPV6:-fd00:10:96::/112}
   JOIN_SUBNET_IPV4=${JOIN_SUBNET_IPV4:-100.64.0.0/16}
   JOIN_SUBNET_IPV6=${JOIN_SUBNET_IPV6:-fd98::/64}
-  MASQUERADE_SUBNET_IPV4=${MASQUERADE_SUBNET_IPV4:-169.254.169.0/29}
-  MASQUERADE_SUBNET_IPV6=${MASQUERADE_SUBNET_IPV6:-fd69::/125}
+  MASQUERADE_SUBNET_IPV4=${MASQUERADE_SUBNET_IPV4:-169.254.0.0/17}
+  MASQUERADE_SUBNET_IPV6=${MASQUERADE_SUBNET_IPV6:-fd69::/112}
   TRANSIT_SWITCH_SUBNET_IPV4=${TRANSIT_SWITCH_SUBNET_IPV4:-100.88.0.0/16}
   TRANSIT_SWITCH_SUBNET_IPV6=${TRANSIT_SWITCH_SUBNET_IPV6:-fd97::/64}
   METALLB_CLIENT_NET_SUBNET_IPV4=${METALLB_CLIENT_NET_SUBNET_IPV4:-172.22.0.0/16}
@@ -598,6 +613,8 @@ set_default_params() {
     KIND_NUM_WORKER=0
   fi
   OVN_MTU=${OVN_MTU:-1400}
+  OVN_ENABLE_DNSNAMERESOLVER=${OVN_ENABLE_DNSNAMERESOLVER:-false}
+  OVN_OBSERV_ENABLE=${OVN_OBSERV_ENABLE:-false}
 }
 
 check_ipv6() {
@@ -707,6 +724,10 @@ scale_kind_cluster() {
     set_ovn_image
   fi
   install_ovn_image
+  if [ "$OVN_ENABLE_DNSNAMERESOLVER" == true ]; then
+    set_dnsnameresolver_images
+    install_dnsnameresolver_images
+  fi
 }
 
 create_kind_cluster() {
@@ -840,24 +861,15 @@ create_ovn_kube_manifests() {
     --enable-multi-external-gateway=true \
     --enable-ovnkube-identity="${OVN_ENABLE_OVNKUBE_IDENTITY}" \
     --enable-persistent-ips=true \
-    --mtu="${OVN_MTU}"
+    --mtu="${OVN_MTU}" \
+    --enable-dnsnameresolver="${OVN_ENABLE_DNSNAMERESOLVER}" \
+    --mtu="${OVN_MTU}" \
+    --enable-observ="${OVN_OBSERV_ENABLE}"
   popd
 }
 
 install_ovn_image() {
-  # If local registry is being used push image there for consumption by kind cluster
-  if [ "$KIND_LOCAL_REGISTRY" == true ]; then
-    echo "OVN-K Image: ${OVN_IMAGE} should already be avaliable in local registry, not loading"
-  else
-    if [ "$OCI_BIN" == "podman" ]; then
-      # podman: cf https://github.com/kubernetes-sigs/kind/issues/2027
-      rm -f /tmp/ovn-kube-fedora.tar
-      podman save -o /tmp/ovn-kube-fedora.tar "${OVN_IMAGE}"
-      kind load image-archive /tmp/ovn-kube-fedora.tar --name "${KIND_CLUSTER_NAME}"
-    else
-      kind load docker-image "${OVN_IMAGE}" --name "${KIND_CLUSTER_NAME}"
-    fi
-  fi
+  install_image ${OVN_IMAGE}
 }
 
 install_ovn_global_zone() {
@@ -932,6 +944,7 @@ install_ovn() {
   run_kubectl apply -f k8s.ovn.org_egressqoses.yaml
   run_kubectl apply -f k8s.ovn.org_egressservices.yaml
   run_kubectl apply -f k8s.ovn.org_adminpolicybasedexternalroutes.yaml
+  run_kubectl apply -f k8s.ovn.org_userdefinednetworks.yaml
   # NOTE: When you update vendoring versions for the ANP & BANP APIs, we must update the version of the CRD we pull from in the below URL
   run_kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/network-policy-api/v0.1.5/config/crd/experimental/policy.networking.k8s.io_adminnetworkpolicies.yaml
   run_kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/network-policy-api/v0.1.5/config/crd/experimental/policy.networking.k8s.io_baselineadminnetworkpolicies.yaml
@@ -1125,6 +1138,14 @@ if [ "$KIND_CREATE" == true ]; then
       add_dns_hostnames
     fi
 fi
+if [ "$OVN_ENABLE_DNSNAMERESOLVER" == true ]; then
+    build_dnsnameresolver_images
+    install_dnsnameresolver_images
+    install_dnsnameresolver_operator
+    update_clusterrole_coredns
+    add_ocp_dnsnameresolver_to_coredns_config
+    update_coredns_deployment_image
+fi
 build_ovn_image
 detect_apiserver_url
 create_ovn_kube_manifests
@@ -1137,6 +1158,9 @@ if [ "$ENABLE_MULTI_NET" == true ]; then
   enable_multi_net
 fi
 kubectl_wait_pods
+if [ "$OVN_ENABLE_DNSNAMERESOLVER" == true ]; then
+    kubectl_wait_dnsnameresolver_pods
+fi
 sleep_until_pods_settle
 # Launch IPsec pods last to make sure that CSR signing logic works
 # Launch csr_signer in background
@@ -1152,5 +1176,11 @@ if [ "$KIND_INSTALL_PLUGINS" == true ]; then
 fi
 if [ "$KIND_INSTALL_KUBEVIRT" == true ]; then
   install_kubevirt
-  install_kubevirt_ipam_controller
+  deploy_kubevirt_binding
+  deploy_passt_binary
+
+  install_cert_manager
+  if [ "$KIND_OPT_OUT_KUBEVIRT_IPAM" != true ]; then
+    install_kubevirt_ipam_controller
+  fi
 fi

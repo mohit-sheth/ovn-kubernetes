@@ -864,7 +864,7 @@ var _ = Describe("Multi Homing", func() {
 								[]mnpapi.MultiPolicyType{mnpapi.PolicyTypeIngress, mnpapi.PolicyTypeEgress},
 								nil,
 								[]mnpapi.MultiNetworkPolicyEgressRule{
-									mnpapi.MultiNetworkPolicyEgressRule{},
+									{},
 								},
 							),
 						),
@@ -879,7 +879,7 @@ var _ = Describe("Multi Homing", func() {
 								[]mnpapi.MultiPolicyType{mnpapi.PolicyTypeEgress},
 								nil,
 								[]mnpapi.MultiNetworkPolicyEgressRule{
-									mnpapi.MultiNetworkPolicyEgressRule{},
+									{},
 								},
 							),
 						),

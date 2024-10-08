@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -623,12 +624,28 @@ func generateEIPConfig(link netlink.Link, eIPNet *net.IPNet, isEIPV6 bool) (*eIP
 }
 
 func generateRoutesForLink(link netlink.Link, isV6 bool) ([]netlink.Route, error) {
-	linkRoutes, err := netlink.RouteList(link, util.GetIPFamily(isV6))
+	routeTable := 254 // main table number
+	// check if device is a slave to a VRF device and if so, use VRF devices associated routing table to lookup routes instead of main table
+	if isVRFSlaveDevice(link) {
+		vrfLink, err := util.GetNetLinkOps().LinkByIndex(link.Attrs().MasterIndex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get VRF link from interface index %d: %w", link.Attrs().MasterIndex, err)
+		}
+		vrf, ok := vrfLink.(*netlink.Vrf)
+		if !ok {
+			actualType := reflect.TypeOf(vrfLink)
+			return nil, fmt.Errorf("expected link %s to be type VRF, instead received type %s", vrfLink.Attrs().Name, actualType)
+		}
+		routeTable = int(vrf.Table)
+	}
+	filterRoute, filterMask := filterRouteByLinkTable(link.Attrs().Index, routeTable)
+	linkRoutes, err := util.GetNetLinkOps().RouteListFiltered(util.GetIPFamily(isV6), filterRoute, filterMask)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get routes for link %s: %v", link.Attrs().Name, err)
 	}
 	linkRoutes = ensureAtLeastOneDefaultRoute(linkRoutes, link.Attrs().Index, isV6)
 	overwriteRoutesTableID(linkRoutes, util.CalculateRouteTableID(link.Attrs().Index))
+	clearSrcFromRoutes(linkRoutes)
 	return linkRoutes, nil
 }
 
@@ -722,7 +739,10 @@ func (c *Controller) updateEIP(existing *state, update *config) error {
 		}
 		if !isEIPOnLink {
 			for _, routeToDelete := range existing.eIPConfig.routes {
-				c.routeManager.Del(routeToDelete)
+				err = c.routeManager.Del(routeToDelete)
+				if err != nil {
+					return fmt.Errorf("failed to delete egress IP route: %w", err)
+				}
 			}
 		}
 	} else if update != nil && update.eIPConfig != nil && len(update.eIPConfig.routes) > 0 &&
@@ -730,7 +750,10 @@ func (c *Controller) updateEIP(existing *state, update *config) error {
 		// delete delta between existing and update
 		routesToDelete := routeDifference(existing.eIPConfig.routes, update.eIPConfig.routes)
 		for _, routeToDelete := range routesToDelete {
-			c.routeManager.Del(routeToDelete)
+			err := c.routeManager.Del(routeToDelete)
+			if err != nil {
+				return fmt.Errorf("failed to delete egress IP route: %w", err)
+			}
 		}
 	}
 	// apply new changes
@@ -765,7 +788,9 @@ func (c *Controller) updateEIP(existing *state, update *config) error {
 		existing.eIPConfig.addr = update.eIPConfig.addr
 		// route manager manages retry
 		for _, routeToAdd := range update.eIPConfig.routes {
-			c.routeManager.Add(routeToAdd)
+			if err := c.routeManager.Add(routeToAdd); err != nil {
+				return err
+			}
 		}
 		existing.eIPConfig.routes = update.eIPConfig.routes
 	}
@@ -1215,7 +1240,9 @@ func (c *Controller) removeStaleIPRoutes(staleIPRoutes sets.Set[string], routeSt
 		if !ok {
 			return fmt.Errorf("expected to find route %q in map: %+v", ipRoute, routeStrToNetlinkRoute)
 		}
-		c.routeManager.Del(route)
+		if err := c.routeManager.Del(route); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1317,6 +1344,12 @@ func ensureAtLeastOneDefaultRoute(routes []netlink.Route, linkIndex int, isV6 bo
 func overwriteRoutesTableID(routes []netlink.Route, tableID int) {
 	for i := range routes {
 		routes[i].Table = tableID
+	}
+}
+
+func clearSrcFromRoutes(routes []netlink.Route) {
+	for i := range routes {
+		routes[i].Src = nil
 	}
 }
 
@@ -1509,4 +1542,8 @@ func getNodeIPFwMarkIPRule(ipFamily int) netlink.Rule {
 	r.Table = 254 // main
 	r.Family = ipFamily
 	return *r
+}
+
+func isVRFSlaveDevice(link netlink.Link) bool {
+	return link.Attrs().Slave != nil && link.Attrs().Slave.SlaveType() == "vrf"
 }

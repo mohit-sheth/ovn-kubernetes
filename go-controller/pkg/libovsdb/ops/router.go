@@ -420,7 +420,9 @@ func CreateOrAddNextHopsToLogicalRouterPolicyWithPredicateOps(nbClient libovsdbc
 	return m.CreateOrUpdateOps(ops, opModels...)
 }
 
-func deleteNextHopsFromLogicalRouterPolicyOps(nbClient libovsdbclient.Client, ops []libovsdb.Operation, routerName string, lrps []*nbdb.LogicalRouterPolicy, nextHops ...string) ([]libovsdb.Operation, error) {
+// DeleteNextHopsFromLogicalRouterPolicyOps removes the Nexthops from the
+// provided logical router policies.
+func DeleteNextHopsFromLogicalRouterPolicyOps(nbClient libovsdbclient.Client, ops []libovsdb.Operation, routerName string, lrps []*nbdb.LogicalRouterPolicy, nextHops ...string) ([]libovsdb.Operation, error) {
 	nextHopSet := sets.NewString(nextHops...)
 	opModels := []operationModel{}
 	router := &nbdb.LogicalRouter{
@@ -481,7 +483,7 @@ func DeleteNextHopsFromLogicalRouterPolicies(nbClient libovsdbclient.Client, rou
 			return err
 		}
 
-		ops, err = deleteNextHopsFromLogicalRouterPolicyOps(nbClient, ops, routerName, []*nbdb.LogicalRouterPolicy{lrp}, nextHops...)
+		ops, err = DeleteNextHopsFromLogicalRouterPolicyOps(nbClient, ops, routerName, []*nbdb.LogicalRouterPolicy{lrp}, nextHops...)
 		if err != nil {
 			return err
 		}
@@ -502,7 +504,7 @@ func DeleteNextHopFromLogicalRouterPoliciesWithPredicateOps(nbClient libovsdbcli
 		return nil, err
 	}
 
-	return deleteNextHopsFromLogicalRouterPolicyOps(nbClient, ops, routerName, lrps, nextHop)
+	return DeleteNextHopsFromLogicalRouterPolicyOps(nbClient, ops, routerName, lrps, nextHop)
 }
 
 // DeleteNextHopFromLogicalRouterPoliciesWithPredicate looks up a logical router
@@ -522,6 +524,22 @@ func DeleteNextHopFromLogicalRouterPoliciesWithPredicate(nbClient libovsdbclient
 // DeleteLogicalRouterPolicies deletes the logical router policies and removes
 // them from the provided logical router
 func DeleteLogicalRouterPolicies(nbClient libovsdbclient.Client, routerName string, lrps ...*nbdb.LogicalRouterPolicy) error {
+	opModels := getDeleteOpModelsForLogicalRouterPolicies(routerName, lrps...)
+
+	m := newModelClient(nbClient)
+	return m.Delete(opModels...)
+}
+
+// DeleteLogicalRouterPoliciesOps builds and returns corresponding delete operations for Logical Router
+// Policies from the provided logical router.
+func DeleteLogicalRouterPoliciesOps(nbClient libovsdbclient.Client, ops []libovsdb.Operation, routerName string, lrps ...*nbdb.LogicalRouterPolicy) ([]libovsdb.Operation, error) {
+	opModels := getDeleteOpModelsForLogicalRouterPolicies(routerName, lrps...)
+
+	m := newModelClient(nbClient)
+	return m.DeleteOps(ops, opModels...)
+}
+
+func getDeleteOpModelsForLogicalRouterPolicies(routerName string, lrps ...*nbdb.LogicalRouterPolicy) []operationModel {
 	router := &nbdb.LogicalRouter{
 		Name:     routerName,
 		Policies: make([]string, 0, len(lrps)),
@@ -544,10 +562,8 @@ func DeleteLogicalRouterPolicies(nbClient libovsdbclient.Client, routerName stri
 		ErrNotFound:      true,
 		BulkOp:           false,
 	}
-	opModels = append(opModels, opModel)
 
-	m := newModelClient(nbClient)
-	return m.Delete(opModels...)
+	return append(opModels, opModel)
 }
 
 // LOGICAL ROUTER STATIC ROUTES
@@ -870,6 +886,7 @@ func buildNAT(
 	logicalPort string,
 	externalMac string,
 	externalIDs map[string]string,
+	match string,
 ) *nbdb.NAT {
 	nat := &nbdb.NAT{
 		Type:        natType,
@@ -877,6 +894,7 @@ func buildNAT(
 		LogicalIP:   logicalIP,
 		Options:     map[string]string{"stateless": "false"},
 		ExternalIDs: externalIDs,
+		Match:       match,
 	}
 
 	if logicalPort != "" {
@@ -897,6 +915,16 @@ func BuildSNAT(
 	logicalPort string,
 	externalIDs map[string]string,
 ) *nbdb.NAT {
+	return BuildSNATWithMatch(externalIP, logicalIP, logicalPort, externalIDs, "")
+}
+
+func BuildSNATWithMatch(
+	externalIP *net.IP,
+	logicalIP *net.IPNet,
+	logicalPort string,
+	externalIDs map[string]string,
+	match string,
+) *nbdb.NAT {
 	externalIPStr := ""
 	if externalIP != nil {
 		externalIPStr = externalIP.String()
@@ -907,7 +935,7 @@ func BuildSNAT(
 	if logicalIPMask != 32 && logicalIPMask != 128 {
 		logicalIPStr = logicalIP.String()
 	}
-	return buildNAT(nbdb.NATTypeSNAT, externalIPStr, logicalIPStr, logicalPort, "", externalIDs)
+	return buildNAT(nbdb.NATTypeSNAT, externalIPStr, logicalIPStr, logicalPort, "", externalIDs, match)
 }
 
 // BuildDNATAndSNAT builds a logical router DNAT/SNAT
@@ -917,6 +945,17 @@ func BuildDNATAndSNAT(
 	logicalPort string,
 	externalMac string,
 	externalIDs map[string]string,
+) *nbdb.NAT {
+	return BuildDNATAndSNATWithMatch(externalIP, logicalIP, logicalPort, externalMac, externalIDs, "")
+}
+
+func BuildDNATAndSNATWithMatch(
+	externalIP *net.IP,
+	logicalIP *net.IPNet,
+	logicalPort string,
+	externalMac string,
+	externalIDs map[string]string,
+	match string,
 ) *nbdb.NAT {
 	externalIPStr := ""
 	if externalIP != nil {
@@ -932,7 +971,8 @@ func BuildDNATAndSNAT(
 		logicalIPStr,
 		logicalPort,
 		externalMac,
-		externalIDs)
+		externalIDs,
+		match)
 }
 
 // isEquivalentNAT if it has same uuid. Otherwise, check if types match.

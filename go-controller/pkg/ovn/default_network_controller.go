@@ -7,15 +7,15 @@ import (
 	"sync"
 	"time"
 
+	nadlister "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/listers/k8s.cni.cncf.io/v1"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/controller"
 	egressfirewall "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/egressfirewall/v1"
 	egressipv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/egressip/v1"
 	egressqoslisters "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/egressqos/v1/apis/listers/egressqos/v1"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/factory"
-	libovsdbops "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/libovsdb/ops"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/metrics"
-	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/nbdb"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/observability"
 	addressset "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/address_set"
 	anpcontroller "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/controller/admin_network_policy"
 	apbroutecontroller "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/controller/apbroute"
@@ -27,6 +27,7 @@ import (
 	addrsetsyncer "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/external_ids_syncer/address_set"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/external_ids_syncer/port_group"
 	lsm "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/logical_switch_manager"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/topology"
 	zoneic "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/zone_interconnect"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/retry"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/syncmap"
@@ -89,11 +90,12 @@ type DefaultNetworkController struct {
 	// Cluster-wide router default Control Plane Protection (COPP) UUID
 	defaultCOPPUUID string
 
+	// Controller in charge of services
+	svcController *svccontroller.Controller
+
 	// Controller used for programming OVN for egress IP
 	eIPC egressIPZoneController
 
-	// Controller used to handle services
-	svcController *svccontroller.Controller
 	// Controller used to handle egress services
 	egressSvcController *egresssvc.Controller
 	// Controller used for programming OVN for Admin Network Policy
@@ -135,22 +137,29 @@ type DefaultNetworkController struct {
 	// zoneChassisHandler handles the local node and remote nodes in creating or updating the chassis entries in the OVN Southbound DB.
 	// Please see zone_interconnect/chassis_handler.go for more details.
 	zoneChassisHandler *zoneic.ZoneChassisHandler
+
+	gatewayTopologyFactory *topology.GatewayTopologyFactory
 }
 
 // NewDefaultNetworkController creates a new OVN controller for creating logical network
 // infrastructure and policy for default l3 network
-func NewDefaultNetworkController(cnci *CommonNetworkControllerInfo) (*DefaultNetworkController, error) {
+func NewDefaultNetworkController(cnci *CommonNetworkControllerInfo, observManager *observability.Manager) (*DefaultNetworkController, error) {
 	stopChan := make(chan struct{})
 	wg := &sync.WaitGroup{}
-	return newDefaultNetworkControllerCommon(cnci, stopChan, wg, nil)
+	return newDefaultNetworkControllerCommon(cnci, stopChan, wg, nil, observManager)
 }
 
 func newDefaultNetworkControllerCommon(cnci *CommonNetworkControllerInfo,
 	defaultStopChan chan struct{}, defaultWg *sync.WaitGroup,
-	addressSetFactory addressset.AddressSetFactory) (*DefaultNetworkController, error) {
+	addressSetFactory addressset.AddressSetFactory, observManager *observability.Manager) (*DefaultNetworkController, error) {
 
 	if addressSetFactory == nil {
 		addressSetFactory = addressset.NewOvnAddressSetFactory(cnci.nbClient, config.IPv4Mode, config.IPv6Mode)
+	}
+
+	var nadLister nadlister.NetworkAttachmentDefinitionLister
+	if util.IsNetworkSegmentationSupportEnabled() {
+		nadLister = cnci.watchFactory.NADInformer().Lister()
 	}
 
 	svcController, err := svccontroller.NewController(
@@ -158,7 +167,9 @@ func newDefaultNetworkControllerCommon(cnci *CommonNetworkControllerInfo,
 		cnci.watchFactory.ServiceCoreInformer(),
 		cnci.watchFactory.EndpointSliceCoreInformer(),
 		cnci.watchFactory.NodeCoreInformer(),
+		nadLister,
 		cnci.recorder,
+		&util.DefaultNetInfo{},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create new service controller while creating new default network controller: %w", err)
@@ -204,6 +215,7 @@ func newDefaultNetworkControllerCommon(cnci *CommonNetworkControllerInfo,
 			localZoneNodes:              &sync.Map{},
 			zoneICHandler:               zoneICHandler,
 			cancelableCtx:               util.NewCancelableContext(),
+			observManager:               observManager,
 		},
 		externalGatewayRouteInfo: apbExternalRouteController.ExternalGWRouteInfoCache,
 		eIPC: egressIPZoneController{
@@ -215,15 +227,12 @@ func newDefaultNetworkControllerCommon(cnci *CommonNetworkControllerInfo,
 			watchFactory:       cnci.watchFactory,
 			nodeZoneState:      syncmap.NewSyncMap[bool](),
 		},
-		loadbalancerClusterCache:     make(map[kapi.Protocol]string),
-		clusterLoadBalancerGroupUUID: "",
-		switchLoadBalancerGroupUUID:  "",
-		routerLoadBalancerGroupUUID:  "",
-		svcController:                svcController,
-		zoneChassisHandler:           zoneChassisHandler,
-		apbExternalRouteController:   apbExternalRouteController,
+		loadbalancerClusterCache:   make(map[kapi.Protocol]string),
+		zoneChassisHandler:         zoneChassisHandler,
+		apbExternalRouteController: apbExternalRouteController,
+		svcController:              svcController,
+		gatewayTopologyFactory:     topology.NewGatewayTopologyFactory(cnci.nbClient),
 	}
-
 	// Allocate IPs for logical router port "GwRouterToJoinSwitchPrefix + OVNClusterRouter". This should always
 	// allocate the first IPs in the join switch subnets.
 	gwLRPIfAddrs, err := oc.getOVNClusterRouterPortToJoinSwitchIfAddrs()
@@ -370,35 +379,13 @@ func (oc *DefaultNetworkController) Init(ctx context.Context) error {
 	if _, _, err := util.RunOVNNbctl("--columns=_uuid", "list", "Load_Balancer_Group"); err != nil {
 		klog.Warningf("Load Balancer Group support enabled, however version of OVN in use does not support Load Balancer Groups.")
 	} else {
-		loadBalancerGroup := nbdb.LoadBalancerGroup{
-			Name: ovntypes.ClusterLBGroupName,
-		}
-		err := libovsdbops.CreateOrUpdateLoadBalancerGroup(oc.nbClient, &loadBalancerGroup)
+		clusterLBGroupUUID, switchLBGroupUUID, routerLBGroupUUID, err := initLoadBalancerGroups(oc.nbClient, oc.NetInfo)
 		if err != nil {
-			klog.Errorf("Error creating cluster-wide load balancer group %s: %v", ovntypes.ClusterLBGroupName, err)
 			return err
 		}
-		oc.clusterLoadBalancerGroupUUID = loadBalancerGroup.UUID
-
-		loadBalancerGroup = nbdb.LoadBalancerGroup{
-			Name: ovntypes.ClusterSwitchLBGroupName,
-		}
-		err = libovsdbops.CreateOrUpdateLoadBalancerGroup(oc.nbClient, &loadBalancerGroup)
-		if err != nil {
-			klog.Errorf("Error creating cluster-wide switch load balancer group %s: %v", ovntypes.ClusterSwitchLBGroupName, err)
-			return err
-		}
-		oc.switchLoadBalancerGroupUUID = loadBalancerGroup.UUID
-
-		loadBalancerGroup = nbdb.LoadBalancerGroup{
-			Name: ovntypes.ClusterRouterLBGroupName,
-		}
-		err = libovsdbops.CreateOrUpdateLoadBalancerGroup(oc.nbClient, &loadBalancerGroup)
-		if err != nil {
-			klog.Errorf("Error creating cluster-wide router load balancer group %s: %v", ovntypes.ClusterRouterLBGroupName, err)
-			return err
-		}
-		oc.routerLoadBalancerGroupUUID = loadBalancerGroup.UUID
+		oc.clusterLoadBalancerGroupUUID = clusterLBGroupUUID
+		oc.switchLoadBalancerGroupUUID = switchLBGroupUUID
+		oc.routerLoadBalancerGroupUUID = routerLBGroupUUID
 	}
 
 	networkID := util.InvalidNetworkID
@@ -920,8 +907,8 @@ func (h *defaultNetworkControllerEventHandler) UpdateResource(oldObj, newObj int
 		// |                    |                   |                                                 |
 		// |--------------------+-------------------+-------------------------------------------------+
 		newNodeIsLocalZoneNode := h.oc.isLocalZoneNode(newNode)
-		zoneClusterChanged := h.oc.nodeZoneClusterChanged(oldNode, newNode, newNodeIsLocalZoneNode)
-		nodeSubnetChanged := nodeSubnetChanged(oldNode, newNode)
+		zoneClusterChanged := h.oc.nodeZoneClusterChanged(oldNode, newNode, newNodeIsLocalZoneNode, types.DefaultNetworkName)
+		nodeSubnetChanged := nodeSubnetChanged(oldNode, newNode, types.DefaultNetworkName)
 		var aggregatedErrors []error
 		if newNodeIsLocalZoneNode {
 			var nodeSyncsParam *nodeSyncs

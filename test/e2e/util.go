@@ -14,8 +14,8 @@ import (
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
+
 	v1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -185,7 +185,6 @@ func unmarshalPodAnnotation(annotations map[string]string, networkName string) (
 
 	podAnnotation := &PodAnnotation{Primary: a.Primary}
 	var err error
-
 	podAnnotation.MAC, err = net.ParseMAC(a.MAC)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse pod MAC %q: %v", a.MAC, err)
@@ -578,18 +577,6 @@ func getMACAddressesForNetwork(container, network string) string {
 		framework.Failf("failed to inspect external test container for its MAC: %v", err)
 	}
 	return strings.TrimSuffix(macAddr, "\n")
-}
-
-// deletePodSyncNS deletes a pod and wait for its deletion.
-// accept the namespace as a parameter.
-func deletePodSyncNS(clientSet kubernetes.Interface, namespace, podName string) {
-	err := clientSet.CoreV1().Pods(namespace).Delete(context.Background(), podName, metav1.DeleteOptions{})
-	framework.ExpectNoError(err, "Failed to delete pod %s in the default namespace", podName)
-
-	gomega.Eventually(func() bool {
-		_, err := clientSet.CoreV1().Pods(namespace).Get(context.Background(), podName, metav1.GetOptions{})
-		return apierrors.IsNotFound(err)
-	}, 3*time.Minute, 5*time.Second).Should(gomega.BeTrue(), "Pod was not being deleted")
 }
 
 // waitClusterHealthy ensures we have a given number of ovn-k worker and master nodes,
@@ -1050,6 +1037,7 @@ func setUnsetTemplateContainerEnv(c kubernetes.Interface, namespace, resource, c
 // allowOrDropNodeInputTrafficOnPort ensures or deletes a drop iptables
 // input rule for the specified node, protocol and port
 func allowOrDropNodeInputTrafficOnPort(op, nodeName, protocol, port string) {
+	ipTablesArgs := []string{"INPUT", "-p", protocol, "--dport", port, "-j", "DROP"}
 	switch op {
 	case "Allow":
 		op = "delete"
@@ -1058,33 +1046,36 @@ func allowOrDropNodeInputTrafficOnPort(op, nodeName, protocol, port string) {
 	default:
 		framework.Failf("unsupported op %s", op)
 	}
+	updateIPTablesRulesForNode(op, nodeName, ipTablesArgs, false)
+	updateIPTablesRulesForNode(op, nodeName, ipTablesArgs, true)
+}
 
+func updateIPTablesRulesForNode(op, nodeName string, ipTablesArgs []string, ipv6 bool) {
 	args := []string{"get", "pods", "--selector=app=ovnkube-node", "--field-selector", fmt.Sprintf("spec.nodeName=%s", nodeName), "-o", "jsonpath={.items..metadata.name}"}
 	ovnKubePodName := e2ekubectl.RunKubectlOrDie(ovnNamespace, args...)
+	iptables := "iptables"
+	if ipv6 {
+		iptables = "ip6tables"
+	}
 
-	ipTablesArgs := []string{"INPUT", "-p", protocol, "--dport", port, "-j", "DROP"}
-
-	args = []string{"exec", ovnKubePodName, "-c", getNodeContainerName(), "--", "iptables", "--check"}
+	args = []string{"exec", ovnKubePodName, "-c", getNodeContainerName(), "--", iptables, "--check"}
 	_, err := e2ekubectl.RunKubectl(ovnNamespace, append(args, ipTablesArgs...)...)
-
 	// errors known to be equivalent to not found
 	notFound1 := "No chain/target/match by that name"
 	notFound2 := "does a matching rule exist in that chain?"
 	notFound := err != nil && (strings.Contains(err.Error(), notFound1) || strings.Contains(err.Error(), notFound2))
 	if err != nil && !notFound {
-		framework.Failf("failed to check existance of iptables rule on node %s: %v", nodeName, err)
+		framework.Failf("failed to check existance of %s rule on node %s: %v", iptables, nodeName, err)
 	}
-
 	if op == "delete" && notFound {
 		// rule is not there
 		return
-	} else if op == "append" && err == nil {
+	} else if op == "insert" && err == nil {
 		// rule is already there
 		return
 	}
-
-	args = []string{"exec", ovnKubePodName, "-c", getNodeContainerName(), "--", "iptables", "--" + op}
-	framework.Logf("%s iptables input rule for protocol %s port %s action DROP on node %s", op, protocol, port, nodeName)
+	args = []string{"exec", ovnKubePodName, "-c", getNodeContainerName(), "--", iptables, "--" + op}
+	framework.Logf("%s %s rule: %q on node %s", op, iptables, strings.Join(ipTablesArgs, ","), nodeName)
 	e2ekubectl.RunKubectlOrDie(ovnNamespace, append(args, ipTablesArgs...)...)
 }
 
@@ -1240,6 +1231,19 @@ func getGatewayMTUSupport(node *v1.Node) bool {
 	_, ok := node.Annotations[ovnGatewayMTUSupport]
 	if !ok {
 		return true
+	}
+	return false
+}
+
+func isKernelModuleLoaded(nodeName, kernelModuleName string) bool {
+	out, err := runCommand(containerRuntime, "exec", nodeName, "lsmod")
+	if err != nil {
+		framework.Failf("failed to list kernel modules for node %s: %v", nodeName, err)
+	}
+	for _, module := range strings.Split(out, "\n") {
+		if strings.HasPrefix(module, kernelModuleName) {
+			return true
+		}
 	}
 	return false
 }

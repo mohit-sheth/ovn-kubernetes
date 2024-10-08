@@ -53,6 +53,10 @@ type BasicNetInfo interface {
 	GetNetworkScopedSwitchName(nodeName string) string
 	GetNetworkScopedJoinSwitchName() string
 	GetNetworkScopedExtSwitchName(nodeName string) string
+	GetNetworkScopedPatchPortName(bridgeID, nodeName string) string
+	GetNetworkScopedExtPortName(bridgeID, nodeName string) string
+	GetNetworkScopedLoadBalancerName(lbName string) string
+	GetNetworkScopedLoadBalancerGroupName(lbGroupName string) string
 }
 
 // NetInfo correlates which NADs refer to a network in addition to the basic
@@ -126,6 +130,22 @@ func (nInfo *DefaultNetInfo) GetNetworkScopedJoinSwitchName() string {
 
 func (nInfo *DefaultNetInfo) GetNetworkScopedExtSwitchName(nodeName string) string {
 	return GetExtSwitchFromNode(nInfo.GetNetworkScopedName(nodeName))
+}
+
+func (nInfo *DefaultNetInfo) GetNetworkScopedPatchPortName(bridgeID, nodeName string) string {
+	return GetPatchPortName(bridgeID, nInfo.GetNetworkScopedName(nodeName))
+}
+
+func (nInfo *DefaultNetInfo) GetNetworkScopedExtPortName(bridgeID, nodeName string) string {
+	return GetExtPortName(bridgeID, nInfo.GetNetworkScopedName(nodeName))
+}
+
+func (nInfo *DefaultNetInfo) GetNetworkScopedLoadBalancerName(lbName string) string {
+	return nInfo.GetNetworkScopedName(lbName)
+}
+
+func (nInfo *DefaultNetInfo) GetNetworkScopedLoadBalancerGroupName(lbGroupName string) string {
+	return nInfo.GetNetworkScopedName(lbGroupName)
 }
 
 // GetNADs returns the NADs associated with the network, no op for default
@@ -317,6 +337,22 @@ func (nInfo *secondaryNetInfo) GetNetworkScopedJoinSwitchName() string {
 
 func (nInfo *secondaryNetInfo) GetNetworkScopedExtSwitchName(nodeName string) string {
 	return GetExtSwitchFromNode(nInfo.GetNetworkScopedName(nodeName))
+}
+
+func (nInfo *secondaryNetInfo) GetNetworkScopedPatchPortName(bridgeID, nodeName string) string {
+	return GetPatchPortName(bridgeID, nInfo.GetNetworkScopedName(nodeName))
+}
+
+func (nInfo *secondaryNetInfo) GetNetworkScopedExtPortName(bridgeID, nodeName string) string {
+	return GetExtPortName(bridgeID, nInfo.GetNetworkScopedName(nodeName))
+}
+
+func (nInfo *secondaryNetInfo) GetNetworkScopedLoadBalancerName(lbName string) string {
+	return nInfo.GetNetworkScopedName(lbName)
+}
+
+func (nInfo *secondaryNetInfo) GetNetworkScopedLoadBalancerGroupName(lbGroupName string) string {
+	return nInfo.GetNetworkScopedName(lbGroupName)
 }
 
 // getPrefix returns if the logical entities prefix for this network
@@ -664,17 +700,32 @@ func NewNetInfo(netconf *ovncnitypes.NetConf) (NetInfo, error) {
 	if netconf.Name == types.DefaultNetworkName {
 		return &DefaultNetInfo{}, nil
 	}
+	var ni NetInfo
+	var err error
 	switch netconf.Topology {
 	case types.Layer3Topology:
-		return newLayer3NetConfInfo(netconf)
+		ni, err = newLayer3NetConfInfo(netconf)
 	case types.Layer2Topology:
-		return newLayer2NetConfInfo(netconf)
+		ni, err = newLayer2NetConfInfo(netconf)
 	case types.LocalnetTopology:
-		return newLocalnetNetConfInfo(netconf)
+		ni, err = newLocalnetNetConfInfo(netconf)
 	default:
 		// other topology NAD can be supported later
 		return nil, fmt.Errorf("topology %s not supported", netconf.Topology)
 	}
+	if err != nil {
+		return nil, err
+	}
+	if ni.IsPrimaryNetwork() && ni.IsSecondary() {
+		ipv4Mode, ipv6Mode := ni.IPMode()
+		if ipv4Mode && !config.IPv4Mode {
+			return nil, fmt.Errorf("network %s is attempting to use ipv4 subnets but the cluster does not support ipv4", ni.GetNetworkName())
+		}
+		if ipv6Mode && !config.IPv6Mode {
+			return nil, fmt.Errorf("network %s is attempting to use ipv6 subnets but the cluster does not support ipv6", ni.GetNetworkName())
+		}
+	}
+	return ni, nil
 }
 
 // ParseNADInfo parses config in NAD spec and return a NetAttachDefInfo object for secondary networks
@@ -684,12 +735,12 @@ func ParseNADInfo(netattachdef *nettypes.NetworkAttachmentDefinition) (NetInfo, 
 		return nil, err
 	}
 
-	ni, err := NewNetInfo(netconf)
-	if err != nil {
+	nadName := GetNADName(netattachdef.Namespace, netattachdef.Name)
+	if err := ValidateNetConf(nadName, netconf); err != nil {
 		return nil, err
 	}
 
-	return ni, nil
+	return NewNetInfo(netconf)
 }
 
 // ParseNetConf parses config in NAD spec for secondary networks
@@ -699,39 +750,106 @@ func ParseNetConf(netattachdef *nettypes.NetworkAttachmentDefinition) (*ovncnity
 		return nil, fmt.Errorf("error parsing Network Attachment Definition %s/%s: %v", netattachdef.Namespace, netattachdef.Name, err)
 	}
 
+	nadName := GetNADName(netattachdef.Namespace, netattachdef.Name)
+	if err := ValidateNetConf(nadName, netconf); err != nil {
+		return nil, err
+	}
+
+	return netconf, nil
+}
+
+func ValidateNetConf(nadName string, netconf *ovncnitypes.NetConf) error {
 	if netconf.Name != types.DefaultNetworkName {
-		nadName := GetNADName(netattachdef.Namespace, netattachdef.Name)
 		if netconf.NADName != nadName {
-			return nil, fmt.Errorf("net-attach-def name (%s) is inconsistent with config (%s)", nadName, netconf.NADName)
+			return fmt.Errorf("net-attach-def name (%s) is inconsistent with config (%s)", nadName, netconf.NADName)
 		}
 	}
 
-	if netconf.AllowPersistentIPs && netconf.Topology == types.Layer3Topology {
-		return nil, fmt.Errorf("layer3 topology does not allow persistent IPs")
+	if err := config.ValidateNetConfNameFields(netconf); err != nil {
+		return err
 	}
 
-	if netconf.Role != "" && netconf.Topology == types.LocalnetTopology {
-		return nil, fmt.Errorf("unexpected network field \"role\" %s for \"localnet\" topology, "+
+	if netconf.AllowPersistentIPs && netconf.Topology == types.Layer3Topology {
+		return fmt.Errorf("layer3 topology does not allow persistent IPs")
+	}
+
+	if netconf.Role != "" && netconf.Role != types.NetworkRoleSecondary && netconf.Topology == types.LocalnetTopology {
+		return fmt.Errorf("unexpected network field \"role\" %s for \"localnet\" topology, "+
 			"localnet topology does not allow network roles to be set since its always a secondary network", netconf.Role)
 	}
 
 	if netconf.Role != "" && netconf.Role != types.NetworkRolePrimary && netconf.Role != types.NetworkRoleSecondary {
-		return nil, fmt.Errorf("invalid network role value %s", netconf.Role)
+		return fmt.Errorf("invalid network role value %s", netconf.Role)
 	}
 
 	if netconf.IPAM.Type != "" {
-		return nil, fmt.Errorf("error parsing Network Attachment Definition %s/%s: %w", netattachdef.Namespace, netattachdef.Name, ErrorUnsupportedIPAMKey)
+		return fmt.Errorf("error parsing Network Attachment Definition %s: %w", nadName, ErrorUnsupportedIPAMKey)
 	}
 
 	if netconf.JoinSubnet != "" && netconf.Topology == types.LocalnetTopology {
-		return nil, fmt.Errorf("localnet topology does not allow specifying join-subnet as services are not supported")
+		return fmt.Errorf("localnet topology does not allow specifying join-subnet as services are not supported")
 	}
 
 	if netconf.Role == types.NetworkRolePrimary && netconf.Subnets == "" && netconf.Topology == types.Layer2Topology {
-		return nil, fmt.Errorf("the subnet attribute must be defined for layer2 primary user defined networks")
+		return fmt.Errorf("the subnet attribute must be defined for layer2 primary user defined networks")
 	}
 
-	return netconf, nil
+	if netconf.Topology != types.LocalnetTopology && netconf.Name != types.DefaultNetworkName {
+		if err := subnetOverlapCheck(netconf); err != nil {
+			return fmt.Errorf("invalid subnet cnfiguration: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// subnetOverlapCheck validates whether POD and join subnet mentioned in a net-attach-def with
+// topology "layer2" and "layer3" does not overlap with ClusterSubnets, ServiceCIDRs, join subnet,
+// and masquerade subnet. It also considers excluded subnets mentioned in a net-attach-def.
+func subnetOverlapCheck(netconf *ovncnitypes.NetConf) error {
+	allSubnets := config.NewConfigSubnets()
+	for _, subnet := range config.Default.ClusterSubnets {
+		allSubnets.Append(config.ConfigSubnetCluster, subnet.CIDR)
+	}
+	for _, subnet := range config.Kubernetes.ServiceCIDRs {
+		allSubnets.Append(config.ConfigSubnetService, subnet)
+	}
+	_, v4JoinCIDR, _ := net.ParseCIDR(config.Gateway.V4JoinSubnet)
+	_, v6JoinCIDR, _ := net.ParseCIDR(config.Gateway.V6JoinSubnet)
+
+	allSubnets.Append(config.ConfigSubnetJoin, v4JoinCIDR)
+	allSubnets.Append(config.ConfigSubnetJoin, v6JoinCIDR)
+
+	_, v4MasqueradeCIDR, _ := net.ParseCIDR(config.Gateway.V4MasqueradeSubnet)
+	_, v6MasqueradeCIDR, _ := net.ParseCIDR(config.Gateway.V6MasqueradeSubnet)
+
+	allSubnets.Append(config.ConfigSubnetMasquerade, v4MasqueradeCIDR)
+	allSubnets.Append(config.ConfigSubnetMasquerade, v6MasqueradeCIDR)
+
+	ni, err := NewNetInfo(netconf)
+	if err != nil {
+		return fmt.Errorf("error while parsing subnets: %v", err)
+	}
+	for _, subnet := range ni.Subnets() {
+		allSubnets.Append(config.UserDefinedSubnets, subnet.CIDR)
+	}
+
+	for _, subnet := range ni.JoinSubnets() {
+		allSubnets.Append(config.UserDefinedJoinSubnet, subnet)
+	}
+	if ni.ExcludeSubnets() != nil {
+		for i, configSubnet := range allSubnets.Subnets {
+			if IsContainedInAnyCIDR(configSubnet.Subnet, ni.ExcludeSubnets()...) {
+				allSubnets.Subnets = append(allSubnets.Subnets[:i], allSubnets.Subnets[i+1:]...)
+			}
+		}
+	}
+	err = allSubnets.CheckForOverlaps()
+	if err != nil {
+		return fmt.Errorf("pod or join subnet overlaps with already configured internal subnets: %v", err)
+	}
+
+	return nil
 }
 
 func CopyNetInfo(netInfo NetInfo) NetInfo {
@@ -836,8 +954,16 @@ func GetPodNADToNetworkMappingWithActiveNetwork(pod *kapi.Pod, nInfo NetInfo, ac
 		Name:      activeNetworkNADKey[1],
 	}
 
+	if nInfo.IsPrimaryNetwork() && AllowsPersistentIPs(nInfo) {
+		ipamClaimName, wasPersistentIPRequested := pod.Annotations[OvnUDNIPAMClaimName]
+		if wasPersistentIPRequested {
+			networkSelections[activeNetworkNADs[0]].IPAMClaimReference = ipamClaimName
+		}
+	}
+
 	return true, networkSelections, nil
 }
+
 func IsMultiNetworkPoliciesSupportEnabled() bool {
 	return config.OVNKubernetesFeature.EnableMultiNetwork && config.OVNKubernetesFeature.EnableMultiNetworkPolicy
 }
@@ -853,4 +979,18 @@ func DoesNetworkRequireIPAM(netInfo NetInfo) bool {
 func DoesNetworkRequireTunnelIDs(netInfo NetInfo) bool {
 	// Layer2Topology with IC require that we allocate tunnel IDs for each pod
 	return netInfo.TopologyType() == types.Layer2Topology && config.OVNKubernetesFeature.EnableInterconnect
+}
+
+func AllowsPersistentIPs(netInfo NetInfo) bool {
+	switch {
+	case netInfo.IsPrimaryNetwork():
+		return netInfo.TopologyType() == types.Layer2Topology && netInfo.AllowsPersistentIPs()
+
+	case netInfo.IsSecondary():
+		return (netInfo.TopologyType() == types.Layer2Topology || netInfo.TopologyType() == types.LocalnetTopology) &&
+			netInfo.AllowsPersistentIPs()
+
+	default:
+		return false
+	}
 }

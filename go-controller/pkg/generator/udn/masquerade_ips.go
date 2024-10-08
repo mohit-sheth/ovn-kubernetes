@@ -46,7 +46,7 @@ func allocateMasqueradeIPs(idName string, masqueradeSubnet string, networkID int
 		return nil, fmt.Errorf("failed initializing generation of network id '%d' %s IPs: %w", networkID, idName, err)
 	}
 	// Let's illustrate the expected IPs for networkID 1 and 2
-	// with userDefinedNetworkMasqueradeIPBase=10 and subnet=169.254.0.0/16
+	// with userDefinedNetworkMasqueradeIPBase=10 and subnet=169.254.0.0/17
 	// networkID=1
 	//  GatewayRouter: 169.254.0.11
 	//  ManagementPort: 169.254.0.12
@@ -65,4 +65,24 @@ func allocateMasqueradeIPs(idName string, masqueradeSubnet string, networkID int
 		return nil, fmt.Errorf("failed generating network id '%d' %s management port ip: %w", networkID, idName, err)
 	}
 	return masqueradeIPs, nil
+}
+
+// GetUDNGatewayMasqueradeIPs returns the list of gateway router masqueradeIPs for the given UDN's networkID
+func GetUDNGatewayMasqueradeIPs(networkID int) ([]*net.IPNet, error) {
+	var masqIPs []*net.IPNet
+	if config.IPv4Mode {
+		v4MasqIPs, err := AllocateV4MasqueradeIPs(networkID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get v4 masquerade IP, networkID %d: %v", networkID, err)
+		}
+		masqIPs = append(masqIPs, v4MasqIPs.GatewayRouter)
+	}
+	if config.IPv6Mode {
+		v6MasqIPs, err := AllocateV6MasqueradeIPs(networkID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get v6 masquerade IP, networkID %d: %v", networkID, err)
+		}
+		masqIPs = append(masqIPs, v6MasqIPs.GatewayRouter)
+	}
+	return masqIPs, nil
 }

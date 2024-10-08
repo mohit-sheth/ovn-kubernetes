@@ -15,6 +15,7 @@ import (
 	"github.com/ovn-org/libovsdb/ovsdb"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/factory"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/generator/udn"
 	libovsdbops "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/libovsdb/ops"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/metrics"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/nbdb"
@@ -26,6 +27,7 @@ import (
 	kapi "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/klog/v2"
+	utilnet "k8s.io/utils/net"
 	"k8s.io/utils/ptr"
 )
 
@@ -338,6 +340,18 @@ func (bsnc *BaseSecondaryNetworkController) addLogicalPortToNetworkForNAD(pod *k
 		ops = append(ops, addOps...)
 	}
 
+	if util.IsNetworkSegmentationSupportEnabled() && bsnc.IsPrimaryNetwork() && config.Gateway.DisableSNATMultipleGWs {
+		// we need to add per-pod SNATs for UDN networks
+		snatOps, err := bsnc.addPerPodSNATOps(pod, podAnnotation.IPs)
+		if err != nil {
+			return fmt.Errorf("failed to construct SNAT for pod %s/%s which is part of network %s, err: %v",
+				pod.Namespace, pod.Name, bsnc.GetNetworkName(), err)
+		}
+		if snatOps != nil {
+			ops = append(ops, snatOps...)
+		}
+	}
+
 	recordOps, txOkCallBack, _, err := bsnc.AddConfigDurationRecord("pod", pod.Namespace, pod.Name)
 	if err != nil {
 		klog.Errorf("Config duration recorder: %v", err)
@@ -374,6 +388,30 @@ func (bsnc *BaseSecondaryNetworkController) addLogicalPortToNetworkForNAD(pod *k
 	}
 
 	return nil
+}
+
+// addPerPodSNATOps returns the ops that will add the SNAT towards masqueradeIP for this given pod
+func (bsnc *BaseSecondaryNetworkController) addPerPodSNATOps(pod *kapi.Pod, podIPs []*net.IPNet) ([]ovsdb.Operation, error) {
+	if !bsnc.isPodScheduledinLocalZone(pod) {
+		// nothing to do if its a remote zone pod
+		return nil, nil
+	}
+	// we need to add per-pod SNATs for UDN networks
+	networkID, err := bsnc.getNetworkID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get networkID for network %q: %v", bsnc.GetNetworkName(), err)
+	}
+	masqIPs, err := udn.GetUDNGatewayMasqueradeIPs(networkID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get masquerade IPs, network %s (%d): %v", bsnc.GetNetworkName(), networkID, err)
+	}
+	ops, err := addOrUpdatePodSNATOps(bsnc.nbClient, bsnc.GetNetworkScopedGWRouterName(pod.Spec.NodeName),
+		masqIPs, podIPs, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct SNAT pods for pod %s/%s which is part of network %s, err: %v",
+			pod.Namespace, pod.Name, bsnc.GetNetworkName(), err)
+	}
+	return ops, nil
 }
 
 // removePodForSecondaryNetwork tried to tear down a pod. It returns nil on success and error on failure;
@@ -487,6 +525,45 @@ func (bsnc *BaseSecondaryNetworkController) removePodForSecondaryNetwork(pod *ka
 		}
 
 		bsnc.forgetPodReleasedBeforeStartup(string(pod.UID), nadName)
+
+		if util.IsNetworkSegmentationSupportEnabled() && bsnc.IsPrimaryNetwork() && config.Gateway.DisableSNATMultipleGWs {
+			// we need to delete per-pod SNATs for UDN networks
+			if err := bsnc.delPerPodSNAT(pod, nadName); err != nil {
+				return fmt.Errorf("failed to delete SNAT for pod %s/%s which is part of network %s, err: %v",
+					pod.Namespace, pod.Name, bsnc.GetNetworkName(), err)
+			}
+		}
+	}
+	return nil
+}
+
+// delPerPodSNAT will delete the SNAT towards masqueradeIP for this given pod
+func (bsnc *BaseSecondaryNetworkController) delPerPodSNAT(pod *kapi.Pod, nadName string) error {
+	if !bsnc.isPodScheduledinLocalZone(pod) {
+		// nothing to do if its a remote zone pod
+		return nil
+	}
+	// we need to add per-pod SNATs for UDN networks
+	networkID, err := bsnc.getNetworkID()
+	if err != nil {
+		return fmt.Errorf("failed to get networkID for network %q: %v", bsnc.GetNetworkName(), err)
+	}
+	masqIPs, err := udn.GetUDNGatewayMasqueradeIPs(networkID)
+	if err != nil {
+		return fmt.Errorf("failed to get masquerade IPs, network %s (%d): %v", bsnc.GetNetworkName(), networkID, err)
+	}
+	podNetAnnotation, err := util.UnmarshalPodAnnotation(pod.Annotations, nadName)
+	if err != nil {
+		return fmt.Errorf("failed to fetch annotations for pod %s/%s in network %s; err: %v", pod.Namespace, pod.Name, bsnc.GetNetworkName(), err)
+	}
+	ops, err := deletePodSNATOps(bsnc.nbClient, nil, bsnc.GetNetworkScopedGWRouterName(pod.Spec.NodeName), masqIPs, podNetAnnotation.IPs)
+	if err != nil {
+		return fmt.Errorf("failed to construct SNAT pods for pod %s/%s which is part of network %s, err: %v",
+			pod.Namespace, pod.Name, bsnc.GetNetworkName(), err)
+	}
+	if _, err = libovsdbops.TransactAndCheck(bsnc.nbClient, ops); err != nil {
+		return fmt.Errorf("failed to delete SNAT rule for pod %s/%s in network %s on gateway router %s: %w",
+			pod.Namespace, pod.Name, bsnc.GetNetworkName(), bsnc.GetNetworkScopedGWRouterName(pod.Spec.NodeName), err)
 	}
 	return nil
 }
@@ -697,9 +774,8 @@ func (bsnc *BaseSecondaryNetworkController) WatchIPAMClaims() error {
 
 func (oc *BaseSecondaryNetworkController) allowPersistentIPs() bool {
 	return config.OVNKubernetesFeature.EnablePersistentIPs &&
-		oc.NetInfo.AllowsPersistentIPs() &&
 		util.DoesNetworkRequireIPAM(oc.NetInfo) &&
-		(oc.NetInfo.TopologyType() == types.Layer2Topology || oc.NetInfo.TopologyType() == types.LocalnetTopology)
+		util.AllowsPersistentIPs(oc.NetInfo)
 }
 
 func (oc *BaseSecondaryNetworkController) getNetworkID() (int, error) {
@@ -715,4 +791,49 @@ func (oc *BaseSecondaryNetworkController) getNetworkID() (int, error) {
 		}
 	}
 	return *oc.networkID, nil
+}
+
+// buildUDNEgressSNAT is used to build the conditional SNAT required on L3 and L2 UDNs to
+// steer traffic correctly via mp0 when leaving OVN to the host
+func (bsnc *BaseSecondaryNetworkController) buildUDNEgressSNAT(localPodSubnets []*net.IPNet, outputPort string,
+	node *kapi.Node) ([]*nbdb.NAT, error) {
+	if len(localPodSubnets) == 0 {
+		return nil, nil // nothing to do
+	}
+	var snats []*nbdb.NAT
+	var masqIP *udn.MasqueradeIPs
+	var err error
+	networkID, err := bsnc.getNetworkID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get networkID for network %q: %v", bsnc.GetNetworkName(), err)
+	}
+	dstMac, err := util.ParseNodeManagementPortMACAddresses(node, bsnc.GetNetworkName())
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse mac address annotation for network %q on node %q, err: %w",
+			bsnc.GetNetworkName(), node.Name, err)
+	}
+	extIDs := map[string]string{
+		types.NetworkExternalID:  bsnc.GetNetworkName(),
+		types.TopologyExternalID: bsnc.TopologyType(),
+	}
+	for _, localPodSubnet := range localPodSubnets {
+		if utilnet.IsIPv6CIDR(localPodSubnet) {
+			masqIP, err = udn.AllocateV6MasqueradeIPs(networkID)
+		} else {
+			masqIP, err = udn.AllocateV4MasqueradeIPs(networkID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if masqIP == nil {
+			return nil, fmt.Errorf("masquerade IP cannot be empty network %s (%d): %v", bsnc.GetNetworkName(), networkID, err)
+		}
+		snats = append(snats, libovsdbops.BuildSNATWithMatch(&masqIP.ManagementPort.IP, localPodSubnet, outputPort,
+			extIDs, getMasqueradeManagementIPSNATMatch(dstMac.String())))
+	}
+	return snats, nil
+}
+
+func getMasqueradeManagementIPSNATMatch(dstMac string) string {
+	return fmt.Sprintf("eth.dst == %s", dstMac)
 }

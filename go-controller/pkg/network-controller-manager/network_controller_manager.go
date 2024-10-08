@@ -17,6 +17,7 @@ import (
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/metrics"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/nbdb"
 	nad "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/network-attach-def-controller"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/observability"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn"
 	ovntypes "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/types"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
@@ -63,7 +64,7 @@ func (cm *NetworkControllerManager) NewNetworkController(nInfo util.NetInfo) (na
 	topoType := nInfo.TopologyType()
 	switch topoType {
 	case ovntypes.Layer3Topology:
-		return ovn.NewSecondaryLayer3NetworkController(cnci, nInfo), nil
+		return ovn.NewSecondaryLayer3NetworkController(cnci, nInfo)
 	case ovntypes.Layer2Topology:
 		return ovn.NewSecondaryLayer2NetworkController(cnci, nInfo), nil
 	case ovntypes.LocalnetTopology:
@@ -81,7 +82,7 @@ func (cm *NetworkControllerManager) newDummyNetworkController(topoType, netName 
 	netInfo, _ := util.NewNetInfo(&ovncnitypes.NetConf{NetConf: types.NetConf{Name: netName}, Topology: topoType})
 	switch topoType {
 	case ovntypes.Layer3Topology:
-		return ovn.NewSecondaryLayer3NetworkController(cnci, netInfo), nil
+		return ovn.NewSecondaryLayer3NetworkController(cnci, netInfo)
 	case ovntypes.Layer2Topology:
 		return ovn.NewSecondaryLayer2NetworkController(cnci, netInfo), nil
 	case ovntypes.LocalnetTopology:
@@ -93,9 +94,15 @@ func (cm *NetworkControllerManager) newDummyNetworkController(topoType, netName 
 // Find all the OVN logical switches/routers for the secondary networks
 func findAllSecondaryNetworkLogicalEntities(nbClient libovsdbclient.Client) ([]*nbdb.LogicalSwitch,
 	[]*nbdb.LogicalRouter, error) {
+
+	belongsToSecondaryNetwork := func(externalIDs map[string]string) bool {
+		_, hasNetworkExternalID := externalIDs[ovntypes.NetworkExternalID]
+		networkRole, hasNetworkRoleExternalID := externalIDs[ovntypes.NetworkRoleExternalID]
+		return hasNetworkExternalID && hasNetworkRoleExternalID && networkRole == ovntypes.NetworkRoleSecondary
+	}
+
 	p1 := func(item *nbdb.LogicalSwitch) bool {
-		_, ok := item.ExternalIDs[ovntypes.NetworkExternalID]
-		return ok
+		return belongsToSecondaryNetwork(item.ExternalIDs)
 	}
 	nodeSwitches, err := libovsdbops.FindLogicalSwitchesWithPredicate(nbClient, p1)
 	if err != nil {
@@ -103,8 +110,7 @@ func findAllSecondaryNetworkLogicalEntities(nbClient libovsdbclient.Client) ([]*
 		return nil, nil, err
 	}
 	p2 := func(item *nbdb.LogicalRouter) bool {
-		_, ok := item.ExternalIDs[ovntypes.NetworkExternalID]
-		return ok
+		return belongsToSecondaryNetwork(item.ExternalIDs)
 	}
 	clusterRouters, err := libovsdbops.FindLogicalRoutersWithPredicate(nbClient, p2)
 	if err != nil {
@@ -200,7 +206,7 @@ func NewNetworkControllerManager(ovnClient *util.OVNClientset, wf *factory.Watch
 
 	var err error
 	if config.OVNKubernetesFeature.EnableMultiNetwork {
-		cm.nadController, err = nad.NewNetAttachDefinitionController("network-controller-manager", cm, wf)
+		cm.nadController, err = nad.NewNetAttachDefinitionController("network-controller-manager", cm, wf, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -279,12 +285,12 @@ func (cm *NetworkControllerManager) newCommonNetworkControllerInfo() (*ovn.Commo
 }
 
 // initDefaultNetworkController creates the controller for default network
-func (cm *NetworkControllerManager) initDefaultNetworkController() error {
+func (cm *NetworkControllerManager) initDefaultNetworkController(observManager *observability.Manager) error {
 	cnci, err := cm.newCommonNetworkControllerInfo()
 	if err != nil {
 		return fmt.Errorf("failed to create common network controller info: %w", err)
 	}
-	defaultController, err := ovn.NewDefaultNetworkController(cnci)
+	defaultController, err := ovn.NewDefaultNetworkController(cnci, observManager)
 	if err != nil {
 		return err
 	}
@@ -380,7 +386,19 @@ func (cm *NetworkControllerManager) Start(ctx context.Context) error {
 	}
 	cm.podRecorder.Run(cm.sbClient, cm.stopChan)
 
-	err = cm.initDefaultNetworkController()
+	var observabilityManager *observability.Manager
+	if config.OVNKubernetesFeature.EnableObservability {
+		observabilityManager = observability.NewManager(cm.nbClient)
+		if err = observabilityManager.Init(); err != nil {
+			return fmt.Errorf("failed to init observability manager: %w", err)
+		}
+	} else {
+		err = observability.Cleanup(cm.nbClient)
+		if err != nil {
+			klog.Warningf("Observability cleanup failed, expected if not all Samples ware deleted yet: %v", err)
+		}
+	}
+	err = cm.initDefaultNetworkController(observabilityManager)
 	if err != nil {
 		return fmt.Errorf("failed to init default network controller: %v", err)
 	}
